@@ -165,21 +165,25 @@ body {
 .settings-foot .link-danger { padding-left: 0; }
 .settings-foot .clear-note { text-align: right; }
 
-/* 画布：返回示例墙 */
+/* 画布：返回示例墙（绝对定位浮于画布左上角，不占文档流，避免点开/关闭时布局上下浮动） */
 .canvas-back {
-  align-self: flex-start;
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 10;
   width: auto;
-  margin: 0 0 10px;
   padding: 6px 12px;
-  background: #fff;
+  background: rgba(255, 255, 255, .92);
   border: 1px solid var(--border);
   border-radius: 8px;
   font: inherit;
   font-size: 13px;
+  font-weight: 600;
   color: var(--primary-d);
   cursor: pointer;
+  box-shadow: 0 2px 6px rgba(31, 35, 41, .08);
 }
-.canvas-back:hover { background: var(--primary-050); border-color: var(--primary-300); }
+.canvas-back:hover { background: #fff; border-color: var(--primary); }
 .canvas-back[hidden] { display: none; }
 input, textarea {
   font: inherit;
