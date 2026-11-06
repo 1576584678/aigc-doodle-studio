@@ -1,10 +1,12 @@
 import type { GenMode } from './api'
+import { isStyleKey, type StyleKey } from './types'
 
 export interface GalleryItem {
   id: string
   prompt: string
   svg: string
   mode: GenMode
+  style: StyleKey
   ts: number
 }
 
@@ -16,7 +18,10 @@ export type AddResult =
 
 const KEY = 'aigc_doodle_gallery'
 
-/** 读取并清洗画廊：非数组、缺 id/svg 的脏项一律丢弃，字段做类型归一。 */
+/**
+ * 读取并清洗画廊：非数组、缺 id/svg 的脏项一律丢弃，字段做类型归一。
+ * FR-09 规则 3：缺 style / 非法 style 的 v0.2 旧数据一律按「极简线稿」兼容。
+ */
 export function loadGallery(): GalleryItem[] {
   try {
     const raw = localStorage.getItem(KEY)
@@ -34,6 +39,7 @@ export function loadGallery(): GalleryItem[] {
         prompt: typeof it.prompt === 'string' ? it.prompt : '',
         svg: it.svg,
         mode: it.mode === 'stickman' ? 'stickman' : 'doodle',
+        style: isStyleKey(it.style) ? it.style : 'minimal',
         ts: typeof it.ts === 'number' ? it.ts : 0
       })
     }
@@ -95,6 +101,36 @@ export function removeFromGallery(id: string): GalleryItem[] {
     return before
   }
   return items
+}
+
+/**
+ * FR-06 撤销：按原索引插回原 item（保留原 id / ts / style），不生成新 id、不排队首。
+ * 写入失败（quota）返回 false，由调用方给出「恢复失败，作品未找回」。
+ */
+export function restoreGalleryItem(item: GalleryItem, index: number): boolean {
+  const items = loadGallery()
+  const at = Math.max(0, Math.min(index, items.length))
+  items.splice(at, 0, item)
+  try {
+    saveGallery(items)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** FR-13：只清除本站 aigc_doodle_* 前缀键，不扩大到其他站点数据或无关键。 */
+export function clearAigcStorageKeys(): void {
+  try {
+    const keys: string[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (k && k.startsWith('aigc_doodle_')) keys.push(k)
+    }
+    keys.forEach((k) => localStorage.removeItem(k))
+  } catch {
+    // 隐私模式下静默忽略
+  }
 }
 
 /** 当前作品数量，供计数显示。 */

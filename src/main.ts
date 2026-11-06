@@ -1,59 +1,108 @@
-import { generateSvg, ApiError, type GenMode } from './api'
+/**
+ * main.ts —— 只保留五态状态机（idle / generating / cancelling / success / error）
+ * 与跨模块事件编排。全部能力按 ux-spec §9.1 C-12 拆到独立模块。
+ *
+ * 事件边界铁律（ux-spec §4.6）：只有 submit() 能改 state；
+ * 自检 / 历史 / 撤销 / 清除互不写入对方状态；删除只写 #toast-region。
+ */
+import { generateSvg, ApiError, apiErrorCategory, type GenMode } from './api'
 import {
   addToGallery,
   loadGallery,
   removeFromGallery,
-  countGallery,
   MAX_ITEMS,
   type GalleryItem
 } from './gallery'
 import { sanitizeSvg } from './sanitize'
+import { dom } from './dom'
+import {
+  setStatus,
+  setStatusRich,
+  clearStatus,
+  markInvalid,
+  clearAllInvalid,
+  showToast,
+  updatePromptCount,
+  escapeHtml
+} from './ui'
+import {
+  getWork,
+  hasWork,
+  currentSource,
+  renderWork,
+  setPrevOkBadge,
+  showVeil,
+  refreshActions,
+  showSamples,
+  resetToSamples
+} from './work'
+import { initHistory, pushHistory, clearHint } from './history'
+import { initUndo, beginUndo, clearUndo } from './undo'
+import { initClear, isDialogOpen } from './clear'
+import { initExport, isExportOpen, closeExportPanel, downloadSvg } from './export'
+import { generateShareCard } from './sharecard'
+import { initSelfTest, setSelfTestEnabled, resetSelfTest } from './selftest'
+import {
+  initStylePicker,
+  getActiveStyle,
+  resetStyle,
+  setEnabled as setStyleEnabled
+} from './styles'
+import { initLayout, syncMobileOrder } from './layout'
+import { initPrint } from './print'
+import { track } from './telemetry'
+import {
+  styleLabel,
+  type CurrentWork,
+  type HistoryItem,
+  type State,
+  type CancelReason
+} from './types'
+import type { SampleItem } from './samples'
 
-// ---------- DOM ----------
-const $ = <T extends HTMLElement = HTMLElement>(id: string): T =>
-  document.getElementById(id) as T
-
-const baseUrlEl = $<HTMLInputElement>('baseUrl')
-const apiKeyEl = $<HTMLInputElement>('apiKey')
-const modelEl = $<HTMLInputElement>('model')
-const promptEl = $<HTMLTextAreaElement>('prompt')
-const generateBtn = $<HTMLButtonElement>('generate')
-const statusEl = $<HTMLDivElement>('status')
-const canvasEl = $<HTMLDivElement>('canvas')
-const galleryEl = $<HTMLDivElement>('gallery')
-const galleryCountEl = $<HTMLSpanElement>('gallery-count')
-const toastRegionEl = $<HTMLDivElement>('toast-region')
-const promptCountEl = $<HTMLSpanElement>('prompt-count')
-
-const downloadBtn = $<HTMLButtonElement>('download')
-const copyBtn = $<HTMLButtonElement>('copy')
-const saveBtn = $<HTMLButtonElement>('save')
-
-const modeBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('.mode-btn'))
-const chips = Array.from(document.querySelectorAll<HTMLButtonElement>('.chip'))
-
-// ---------- 状态机 ----------
-type State = 'idle' | 'generating' | 'cancelling' | 'success' | 'error'
+// ---------- 五态状态机 ----------
 let state: State = 'idle'
 let controller: AbortController | null = null
-let cancelReason: 'user' | 'timeout' | null = null
+let cancelReason: CancelReason = null
 let retryCount = 0
+let attemptTimer: number | null = null
+let totalTimer: number | null = null
 let lastGeneratedPrompt = ''
-let timer: number | null = null
-let currentSvg = '' // 只存过滤后的安全 SVG
-let currentMode: GenMode = 'doodle'
-let currentSvgMode: GenMode = currentMode // 画布当前 SVG 的真实生成模式（可与模式按钮不同）
+let currentModeValue: GenMode = 'doodle' // 模式按钮选中态（决定下一次生成，不等于画布内容）
 
-const TIMEOUT_MS = 60000 // 总上限，重试不重置
+const ATTEMPT_TIMEOUT_MS = 45000
+const TOTAL_TIMEOUT_MS = 90000
+const RETRY_DELAY_MS = 800
+
+/** 通过函数读取 state，规避 TS 对跨回调写入的控制流收窄。 */
+function readState(): State {
+  return state
+}
 
 /**
- * 通过函数读取 state：click 处理器会在 await 期间把它改成 'cancelling'，
- * 而 TS 的控制流分析不建模跨回调写入，直接比较会被收窄成不可能的分支。
+ * 同理：cancelReason 会被总超时 / 单次超时计时器回调与「取消生成」按钮
+ * 在异步流程之外写入，TS 控制流分析不建模跨回调写入，会把 catch/finally
+ * 中的类型误收窄为 'single' | null（TS2367）。统一经带显式返回类型的函数
+ * 读取，保留完整联合类型，且不改变任何运行时语义。
  */
-function readState(): State { return state }
+function readCancelReason(): CancelReason {
+  return cancelReason
+}
 
-// ---------- 设置持久化 ----------
+/** 统一状态切换：同步 dataset、error 角标、自检/风格按钮可用性。 */
+function setState(next: State): void {
+  state = next
+  dom.generate.dataset.state = next
+  // C-18/C-19：error 不清空画布、不改边框；角标仅在 error + 画布非空 + 非示例
+  setPrevOkBadge(next === 'error' && hasWork() && currentSource() !== 'sample')
+  const interactive = next !== 'generating' && next !== 'cancelling'
+  setSelfTestEnabled(interactive)
+  setStyleEnabled(interactive)
+}
+
+// ---------- 设置持久化（SEC-04：勾选「本次不保存 Key」时排除 apiKey） ----------
 const SETTINGS_KEY = 'aigc_doodle_settings'
+
 function loadSettings(): void {
   try {
     const s = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') as {
@@ -61,103 +110,191 @@ function loadSettings(): void {
       apiKey?: string
       model?: string
     }
-    baseUrlEl.value = s.baseUrl ?? ''
-    apiKeyEl.value = s.apiKey ?? ''
-    modelEl.value = s.model ?? ''
-  } catch { /* ignore */ }
-}
-function persistSettings(): void {
-  try {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-      baseUrl: baseUrlEl.value,
-      apiKey: apiKeyEl.value,
-      model: modelEl.value
-    }))
-  } catch { /* 隐私模式下静默忽略 */ }
+    dom.baseUrl.value = s.baseUrl ?? ''
+    dom.apiKey.value = s.apiKey ?? ''
+    dom.model.value = s.model ?? ''
+  } catch {
+    /* 忽略损坏数据 */
+  }
 }
 
-// ---------- 模式切换 ----------
+function persistSettings(): void {
+  try {
+    const payload: Record<string, string> = {
+      baseUrl: dom.baseUrl.value,
+      model: dom.model.value
+    }
+    // 勾选时不写入 apiKey；若此前已存过 Key，本次重写即把它从存储中移除
+    if (!dom.dontSaveKey.checked) payload.apiKey = dom.apiKey.value
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(payload))
+  } catch {
+    /* 隐私模式下静默忽略 */
+  }
+}
+
+// ---------- 模式按钮（历史切换绝不调用） ----------
 function setMode(mode: GenMode): void {
-  currentMode = mode
-  modeBtns.forEach((b) => {
+  currentModeValue = mode
+  dom.modeBtns.forEach((b) => {
     const active = b.dataset.mode === mode
     b.classList.toggle('active', active)
     b.setAttribute('aria-pressed', String(active))
   })
 }
 
-// ---------- 状态显示 ----------
-type StatusKind = 'info' | 'error' | 'ok'
-function setStatus(text: string, kind: StatusKind = 'info'): void {
-  // 文案相同不重写 textContent，避免 aria-live 重复播报
-  if (statusEl.textContent === text) {
-    if (statusEl.dataset.kind !== kind) {
-      statusEl.className = `status ${kind}`
-      statusEl.dataset.kind = kind
-    }
-    return
+// ---------- 作品载入编排（success / 示例 / 画廊 / 历史共用） ----------
+function toHistory(meta: CurrentWork, model: string): HistoryItem {
+  return { ...meta, ts: Date.now(), model }
+}
+
+/**
+ * 载入一幅作品：
+ * - error 态主动载入 → clearStatus + idle + 移除角标（C-20）
+ * - 历史入队发生在 renderWork 之前，保证容量丢弃提示先于画布渲染出现（§1.3.2）
+ * - 丢弃说明合并进 #status，只播报一次
+ */
+function loadWork(
+  meta: CurrentWork,
+  opts: { addHistory: boolean; model?: string; statusText?: string }
+): void {
+  if (state === 'error') {
+    clearStatus()
+    setState('idle')
   }
-  statusEl.textContent = text
-  statusEl.className = `status ${kind}`
-  statusEl.dataset.kind = kind
-}
-function clearStatus(): void {
-  statusEl.textContent = ''
-  statusEl.className = 'status'
-  statusEl.removeAttribute('data-kind')
-}
-function markInvalid(el: HTMLElement): void {
-  el.setAttribute('aria-invalid', 'true')
-  el.focus()
-}
-function clearAllInvalid(): void {
-  ;[promptEl, baseUrlEl, apiKeyEl].forEach((el) => el.removeAttribute('aria-invalid'))
-}
-
-// ---------- Toast ----------
-type ToastKind = 'ok' | 'warn' | 'info'
-function showToast(text: string, kind: ToastKind): void {
-  const stack = toastRegionEl.querySelectorAll<HTMLElement>('.toast')
-  if (stack.length >= 2) stack[0].remove() // 最多 2 条，超出移除最旧
-  const toast = document.createElement('div')
-  toast.className = `toast ${kind}`
-  if (kind === 'warn') toast.setAttribute('role', 'alert') // 容量/存储类需要更强势播报
-  toast.textContent = text
-  toastRegionEl.appendChild(toast)
-  window.setTimeout(() => {
-    if (!toast.isConnected) return
-    toast.classList.add('is-leaving')
-    window.setTimeout(() => toast.remove(), 180)
-  }, 2800)
-}
-
-// ---------- 字数计数 ----------
-function updatePromptCount(): void {
-  promptCountEl.textContent = `${promptEl.value.length} / 300`
-}
-
-// ---------- 渲染 SVG 到舞台（二次过滤，防存储型 XSS） ----------
-function renderSvg(svg: string, mode: GenMode = currentMode): void {
-  const safe = sanitizeSvg(svg)
-  currentSvg = safe
-  currentSvgMode = mode // 画布内容与模式元数据始终绑定
-  canvasEl.classList.remove('empty')
-  canvasEl.innerHTML = safe
-  const svgEl = canvasEl.querySelector('svg')
-  if (svgEl) {
-    svgEl.setAttribute('role', 'img')
-    svgEl.setAttribute(
-      'aria-label',
-      `${mode === 'stickman' ? '生成的火柴人：' : '生成的简笔画：'}${lastGeneratedPrompt}`
+  const overflow = opts.addHistory
+    ? pushHistory(toHistory(meta, opts.model ?? dom.model.value.trim()))
+    : false
+  renderWork(meta)
+  if (opts.statusText) {
+    setStatus(
+      overflow
+        ? `${opts.statusText}；较早的一张已移出本次历史，可先存入画廊`
+        : opts.statusText,
+      'ok'
     )
   }
-  ;[downloadBtn, copyBtn, saveBtn].forEach((b) => { b.disabled = false })
+  refreshActions()
 }
 
-// ---------- 生成：统一 submit ----------
+function onSampleSelect(s: SampleItem): void {
+  const meta: CurrentWork = {
+    svg: s.svg,
+    prompt: s.prompt,
+    mode: s.mode,
+    style: 'minimal',
+    source: 'sample'
+  }
+  // 示例：新增一条历史（不写 localStorage、不占 50 张配额），#status 不写
+  loadWork(meta, { addHistory: true, model: '' })
+  clearStatus()
+  track('sample_view')
+  // 示例墙被全幅 SVG 替换，触发按钮已断开：焦点归还到首个工作按钮，避免掉到 body
+  dom.download.focus({ preventScroll: true })
+}
+
+function onHistorySelect(item: HistoryItem): void {
+  // 不改 .mode-btn.active / .style-btn.is-active（FR-05 规则 3 / C-20）
+  loadWork(
+    {
+      svg: item.svg,
+      prompt: item.prompt,
+      mode: item.mode,
+      style: item.style,
+      source: item.source
+    },
+    { addHistory: false }
+  )
+  clearStatus()
+  // history.ts 的 render() 重建了列表，焦点回到当前项
+  dom.historyStrip
+    .querySelector<HTMLButtonElement>('.history-item.is-current')
+    ?.focus({ preventScroll: true })
+}
+
+// ---------- 画廊渲染 ----------
+function renderGallery(): void {
+  const items = loadGallery()
+  const count = items.length
+  dom.galleryCount.textContent = `${count} / ${MAX_ITEMS}`
+  dom.galleryCount.classList.toggle('is-full', count >= MAX_ITEMS)
+  if (count === 0) {
+    dom.gallery.innerHTML =
+      '<p class="empty-gallery" role="listitem">还没有作品，生成后点"存入画廊"。</p>'
+    refreshActions()
+    return
+  }
+  dom.gallery.innerHTML = ''
+  items.forEach((it) => dom.gallery.appendChild(galleryCard(it)))
+  refreshActions()
+}
+
+function galleryCard(it: GalleryItem): HTMLElement {
+  const card = document.createElement('div')
+  card.className = 'card'
+  card.setAttribute('role', 'listitem')
+  const modeLabel = it.mode === 'stickman' ? '火柴人' : '简笔画'
+  const promptText = it.prompt || lastGeneratedPrompt
+  const esc = escapeHtml(promptText)
+  let safeSvg = ''
+  try {
+    safeSvg = sanitizeSvg(it.svg)
+  } catch {
+    safeSvg = ''
+  }
+
+  card.innerHTML = `
+    <button type="button" class="thumb" aria-label="在画布中查看：${esc}">${safeSvg}</button>
+    <div class="meta">
+      <span class="tag tag-${it.mode}">${modeLabel} · ${escapeHtml(styleLabel(it.style))}</span>
+      <p class="desc" title="${esc}">${esc}</p>
+    </div>
+    <button class="del" type="button" title="删除" aria-label="删除作品：${esc}（${modeLabel}）">✕</button>
+  `
+  const innerSvg = card.querySelector('.thumb svg')
+  if (innerSvg) innerSvg.setAttribute('aria-hidden', 'true')
+
+  card.querySelector<HTMLButtonElement>('.thumb')?.addEventListener('click', () => {
+    if (!safeSvg) {
+      showToast('这幅作品的数据已损坏，无法显示', 'warn')
+      return
+    }
+    lastGeneratedPrompt = promptText
+    // 画廊查看作为一条新历史项，不覆盖当前项（FR-05 规则 4）
+    loadWork(
+      { svg: safeSvg, prompt: promptText, mode: it.mode, style: it.style, source: 'gallery' },
+      { addHistory: true, model: '' }
+    )
+  })
+
+  card.querySelector<HTMLButtonElement>('.del')?.addEventListener('click', (e) => {
+    e.stopPropagation()
+    const cards = Array.from(dom.gallery.querySelectorAll<HTMLElement>('.card'))
+    const index = cards.indexOf(card)
+    const before = loadGallery()
+    const remaining = removeFromGallery(it.id)
+    if (remaining.length === before.length) {
+      showToast('浏览器不允许本地保存，删除未能生效', 'warn')
+      return
+    }
+    renderGallery()
+    // 单一播报源：删除只写 toast，绝不写 #status（C-11，删除 main.ts:533 旧写法）
+    beginUndo(it, index)
+    // 焦点迁移沿用 v0.2：相邻卡片 .del → #gallery(tabindex=-1)
+    const dels = Array.from(dom.gallery.querySelectorAll<HTMLButtonElement>('.del'))
+    const next = dels[Math.min(index, dels.length - 1)]
+    if (next) next.focus()
+    else dom.gallery.focus()
+  })
+  return card
+}
+
+// ---------- 可中断重试延迟 ----------
 function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise<void>((resolve) => {
-    if (signal.aborted) { resolve(); return }
+    if (signal.aborted) {
+      resolve()
+      return
+    }
     let timerId = 0
     let settled = false
     const finish = (): void => {
@@ -172,232 +309,335 @@ function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
   })
 }
 
+// ---------- 生成：五态状态机主体（FR-01 引导 / FR-11 分段超时） ----------
 async function submit(): Promise<void> {
-  // 首行守卫：生成中 / 取消中一律吞掉重复提交
   if (state === 'generating' || state === 'cancelling') return
 
-  // ---- 前置校验（顺序 + focus，任一失败不发请求、保持原态） ----
-  const prompt = promptEl.value.replace(/[\s\u3000\u00A0\u200B-\u200D\uFEFF]+/g, ' ').trim()
+  const prompt = dom.prompt.value
+    .replace(/[\s\u3000\u00A0\u200B-\u200D\uFEFF]+/g, ' ')
+    .trim()
+  const baseUrl = dom.baseUrl.value.trim()
+  const apiKey = dom.apiKey.value.trim()
+  const model = dom.model.value.trim()
+
+  // 缺 Key / URL / Model → FR-01 引导（info 非红字、不标 aria-invalid、不聚焦报错框、不发请求）
+  if (!baseUrl || !apiKey || !model) {
+    clearAllInvalid()
+    setStatusRich('先看看示例，或填写自己的模型配置', 'info', [
+      {
+        label: '看示例',
+        onClick: () => {
+          resetToSamples()
+          dom.canvas.scrollIntoView({ block: 'center' })
+        }
+      },
+      {
+        label: '去配置',
+        onClick: () => {
+          dom.settings.open = true
+          dom.baseUrl.focus()
+        }
+      }
+    ])
+    return
+  }
+  // 缺 prompt → EX-01（聚焦输入框、标 aria-invalid）
   if (!prompt) {
     setStatus('请先写下要画的内容，或点上方示例', 'error')
-    markInvalid(promptEl)
-    return
-  }
-  if (!baseUrlEl.value.trim()) {
-    setStatus('请先填写 API 地址，才能开始生成', 'error')
-    markInvalid(baseUrlEl)
-    return
-  }
-  if (!apiKeyEl.value.trim()) {
-    setStatus('请先填写 API Key，才能开始生成', 'error')
-    markInvalid(apiKeyEl)
+    markInvalid(dom.prompt)
     return
   }
   if (prompt.length > 300) {
     setStatus('描述太长啦，请精简到 300 字以内', 'error')
-    markInvalid(promptEl)
+    markInvalid(dom.prompt)
     return
   }
   clearAllInvalid()
 
+  // EX-17 离线：用 info 而非 error，不发请求
+  if (!navigator.onLine) {
+    setStatus('当前离线，示例作品与画廊仍可用', 'info')
+    return
+  }
+
   // ---- 进入 generating ----
   lastGeneratedPrompt = prompt
-  state = 'generating'
+  setState('generating')
   cancelReason = null
   retryCount = 0
+  clearUndo() // submit 终止撤销窗口（§4.6）
 
-  generateBtn.textContent = '取消生成' // 全宽按钮，只改 textContent 不影响盒模型高度
-  generateBtn.classList.remove('is-cancelling')
-  generateBtn.classList.add('is-generating')
-  generateBtn.dataset.state = 'generating'
-  generateBtn.setAttribute('aria-busy', 'true')
-  generateBtn.removeAttribute('aria-disabled')
+  dom.generate.textContent = '取消生成'
+  dom.generate.classList.remove('is-cancelling')
+  dom.generate.classList.add('is-generating')
+  dom.generate.setAttribute('aria-busy', 'true')
+  dom.generate.removeAttribute('aria-disabled')
   setStatus('正在生成，请稍候…', 'info')
-  chips.forEach((chip) => {
+  setPrevOkBadge(false)
+  dom.chips.forEach((chip) => {
     chip.disabled = true
     chip.title = '生成中，示例暂不可用'
   })
-  canvasEl.setAttribute('aria-busy', 'true')
+  dom.canvas.setAttribute('aria-busy', 'true')
+  showVeil(true)
 
-  const ctrl = new AbortController()
-  controller = ctrl
-  timer = window.setTimeout(() => {
-    if (cancelReason !== null) return
-    cancelReason = 'timeout'
+  const t0 = Date.now()
+  // 总上限从 t0 起算，永不重置；优先于任何 attempt 计时器
+  totalTimer = window.setTimeout(() => {
+    if (readCancelReason() !== null) return
+    cancelReason = 'total'
     setStatus('生成时间太长，已停止。请缩短描述或稍后再试', 'error')
-    if (!ctrl.signal.aborted) ctrl.abort()
-  }, TIMEOUT_MS)
+    if (controller && !controller.signal.aborted) controller.abort()
+  }, TOTAL_TIMEOUT_MS)
 
   const opts = {
-    baseUrl: baseUrlEl.value,
-    apiKey: apiKeyEl.value,
-    model: modelEl.value,
-    mode: currentMode,
+    baseUrl,
+    apiKey,
+    model,
+    mode: currentModeValue,
+    style: getActiveStyle(),
     prompt
   }
 
   try {
     for (let attempt = 0; attempt <= 1; attempt++) {
+      const ctrl = new AbortController()
+      controller = ctrl
+      let singleTimedOut = false
+      // 每次 attempt 单独 45s；重试重新计满
+      attemptTimer = window.setTimeout(() => {
+        if (readCancelReason() !== null) return
+        singleTimedOut = true
+        ctrl.abort()
+      }, ATTEMPT_TIMEOUT_MS)
+
       try {
         const svg = await generateSvg(opts, ctrl.signal)
-        // T7b：cancelling 期间任何 resolve 一律丢弃，不 renderSvg、不报成功
-        if (cancelReason === null) {
-          renderSvg(svg)
-          setStatus('生成成功，可以下载或存入画廊', 'ok')
-          state = 'success'
+        // T7b 不变量：cancelling / 超时期间任何 resolve 一律丢弃
+        if (readCancelReason() === null) {
+          loadWork(
+            { svg, prompt, mode: opts.mode, style: opts.style, source: 'gen' },
+            { addHistory: true, model, statusText: '生成成功，可以下载或存入画廊' }
+          )
+          setState('success')
+          track('gen_ok')
         }
         break
       } catch (e) {
         const retryable =
-          e instanceof ApiError &&
-          (e.code === 'network' || (e.code === 'http' && (e.status ?? 0) >= 500))
-        if (retryable && attempt === 0 && cancelReason === null) {
+          singleTimedOut ||
+          (e instanceof ApiError &&
+            (e.code === 'network' || (e.code === 'http' && (e.status ?? 0) >= 500)))
+        const budgetLeft = TOTAL_TIMEOUT_MS - (Date.now() - t0) > RETRY_DELAY_MS
+        if (retryable && attempt === 0 && readCancelReason() === null && budgetLeft) {
           retryCount++
           setStatus('网络没连上，正在重试一次…', 'info')
-          await abortableDelay(800, ctrl.signal) // 可被 abort 打断
-          if (cancelReason !== null) break
-          continue
+          await abortableDelay(RETRY_DELAY_MS, ctrl.signal)
+          if (readCancelReason() !== null) break
+          continue // 文案与实际发起第二次请求一致（FR-11 验收）
         }
-        // 4xx / invalid-svg / 校验错误一律不重试
+        if (singleTimedOut && readCancelReason() === null) {
+          cancelReason = 'single'
+          setStatus('生成时间太长，已停止。请缩短描述或稍后再试', 'error')
+        }
         throw e
+      } finally {
+        if (attemptTimer !== null) {
+          window.clearTimeout(attemptTimer)
+          attemptTimer = null
+        }
       }
     }
   } catch (e) {
-    if (cancelReason === 'user') {
-      state = 'idle'
-    } else if (cancelReason === 'timeout') {
-      // 超时文案已由 timer 设置，这里不覆盖
-      state = 'error'
+    if (readCancelReason() === 'user') {
+      setState('idle')
+    } else if (
+      readCancelReason() === 'total' ||
+      readCancelReason() === 'single' ||
+      readCancelReason() === 'timeout'
+    ) {
+      // 超时文案已由计时器设置，这里与 finally 均不覆盖
+      setState('error')
+      track('gen_fail_timeout')
     } else if (e instanceof ApiError) {
       setStatus(e.userMessage, 'error')
-      if (e.detail) console.error(e.detail)
-      state = 'error'
+      setState('error')
+      track(`gen_fail_${apiErrorCategory(e)}`)
     } else {
       setStatus('请求没被接受，请检查设置或换一句描述再试', 'error')
-      console.error(e)
-      state = 'error'
+      setState('error')
+      track('gen_fail_other')
     }
   } finally {
-    const cancelledByUser = cancelReason === 'user'
-    const timedOut = cancelReason === 'timeout'
+    const cancelledByUser = readCancelReason() === 'user'
+    const timedOut =
+      readCancelReason() === 'total' || readCancelReason() === 'single' || readCancelReason() === 'timeout'
 
-    // 统一清理
-    if (timer !== null) { window.clearTimeout(timer); timer = null }
+    if (totalTimer !== null) {
+      window.clearTimeout(totalTimer)
+      totalTimer = null
+    }
+    if (attemptTimer !== null) {
+      window.clearTimeout(attemptTimer)
+      attemptTimer = null
+    }
     controller = null
     cancelReason = null
     retryCount = 0
 
-    generateBtn.setAttribute('aria-busy', 'false')
-    canvasEl.setAttribute('aria-busy', 'false')
-    generateBtn.removeAttribute('aria-disabled')
-    generateBtn.textContent = '生成'
-    generateBtn.classList.remove('is-generating', 'is-cancelling')
-    chips.forEach((chip) => {
+    dom.generate.setAttribute('aria-busy', 'false')
+    dom.canvas.setAttribute('aria-busy', 'false')
+    dom.generate.removeAttribute('aria-disabled')
+    dom.generate.textContent = '生成'
+    dom.generate.classList.remove('is-generating', 'is-cancelling')
+    showVeil(false)
+    dom.chips.forEach((chip) => {
       chip.disabled = false
       chip.removeAttribute('title')
     })
 
     if (cancelledByUser) {
       setStatus('已取消，可以重新生成', 'info')
-      state = 'idle'
+      setState('idle')
     } else if (timedOut) {
-      state = 'error'
+      setState('error') // 不覆盖超时文案
     } else if (readState() === 'cancelling') {
-      state = 'idle'
+      setState('idle')
+    } else {
+      setState(state) // success / error：同步角标与控件可用性，文案保持
     }
-    generateBtn.dataset.state = state
 
-    // 焦点留在 #generate：cancelling 用 aria-disabled 而非原生 disabled，避免掉到 body
+    // 焦点兜底：cancelling 用 aria-disabled 而非原生 disabled，避免掉到 body
     if (document.activeElement === document.body || document.activeElement === null) {
-      generateBtn.focus()
+      dom.generate.focus()
     }
   }
 }
 
 // ---------- 主按钮：按状态分派（生成 / 取消） ----------
-generateBtn.addEventListener('click', () => {
+dom.generate.addEventListener('click', () => {
   if (state === 'generating') {
-    // 先同步状态与文案，再 abort；不使用原生 disabled
-    state = 'cancelling'
+    setState('cancelling')
     cancelReason = 'user'
     setStatus('正在取消…', 'info')
-    generateBtn.textContent = '正在取消…'
-    generateBtn.classList.remove('is-generating')
-    generateBtn.classList.add('is-cancelling')
-    generateBtn.dataset.state = 'cancelling'
-    generateBtn.setAttribute('aria-disabled', 'true')
+    dom.generate.textContent = '正在取消…'
+    dom.generate.classList.remove('is-generating')
+    dom.generate.classList.add('is-cancelling')
+    dom.generate.dataset.state = 'cancelling'
+    dom.generate.setAttribute('aria-disabled', 'true')
     if (controller && !controller.signal.aborted) controller.abort()
     return
   }
-  if (state === 'cancelling') return // 重复点击防护
+  if (state === 'cancelling') return
   void submit()
 })
 
-// ---------- FR-07: Ctrl / ⌘ + Enter ----------
+// ---------- 全局 keydown（C-07：首行 dialog.open 守卫） ----------
 document.addEventListener('keydown', (e: KeyboardEvent) => {
+  if (isDialogOpen()) return
+  if (e.key === 'Escape') {
+    if (isExportOpen()) {
+      e.preventDefault()
+      closeExportPanel(true)
+    }
+    return
+  }
   if (!((e.ctrlKey || e.metaKey) && e.key === 'Enter')) return
-  e.preventDefault()
   const target = e.target
-  if (target instanceof Element && target.closest('.del')) return
-  void submit() // generating / cancelling 时由首行守卫吞掉
+  if (target instanceof Element) {
+    if (
+      target.closest('.del') ||
+      target.closest('.export-panel') ||
+      target.closest('.toast-undo') ||
+      target.closest('.btn-test') ||
+      target.closest('dialog')
+    ) {
+      return
+    }
+  }
+  e.preventDefault()
+  void submit()
 })
 
-// ---------- 模式按钮 ----------
-modeBtns.forEach((btn) => {
+// ---------- 模式按钮 / 示例 chips ----------
+dom.modeBtns.forEach((btn) => {
   btn.addEventListener('click', () => {
     setMode(btn.dataset.mode === 'stickman' ? 'stickman' : 'doodle')
   })
 })
 
-// ---------- 示例 chips ----------
-chips.forEach((chip) => {
+dom.chips.forEach((chip) => {
   chip.addEventListener('click', () => {
     const text = chip.dataset.prompt ?? ''
     const mode: GenMode = chip.dataset.mode === 'stickman' ? 'stickman' : 'doodle'
-    const switched = mode !== currentMode
-    promptEl.value = text
+    const switched = mode !== currentModeValue
+    dom.prompt.value = text
     if (switched) setMode(mode)
     updatePromptCount()
-    promptEl.removeAttribute('aria-invalid')
-    if (statusEl.dataset.kind === 'error') clearStatus()
+    dom.prompt.removeAttribute('aria-invalid')
+    if (state === 'error' || dom.status.dataset.kind === 'error') {
+      clearStatus()
+      setState('idle')
+    }
     const suffix = switched
-      ? (mode === 'stickman' ? '（已切换到火柴人模式）' : '（已切换到简笔画模式）')
+      ? mode === 'stickman'
+        ? '（已切换到火柴人模式）'
+        : '（已切换到简笔画模式）'
       : ''
     setStatus('已填入示例，可修改后生成' + suffix, 'info')
-    promptEl.focus()
-    promptEl.setSelectionRange(text.length, text.length)
-    // 不提交、不滚动
+    dom.prompt.focus()
+    dom.prompt.setSelectionRange(text.length, text.length)
   })
 })
 
 // ---------- 输入事件 ----------
-;[baseUrlEl, apiKeyEl, modelEl].forEach((el) => {
+;[dom.baseUrl, dom.apiKey, dom.model].forEach((el) => {
   el.addEventListener('change', persistSettings)
-  el.addEventListener('input', () => el.removeAttribute('aria-invalid'))
+  el.addEventListener('input', () => {
+    el.removeAttribute('aria-invalid')
+    if (state === 'error') {
+      clearStatus()
+      setState('idle')
+    }
+  })
 })
-promptEl.addEventListener('input', () => {
+dom.prompt.addEventListener('input', () => {
   updatePromptCount()
-  promptEl.removeAttribute('aria-invalid')
-  // T9：error 态下用户重新输入即清空错误文案并回到 idle
-  if (state === 'error' || statusEl.dataset.kind === 'error') {
+  dom.prompt.removeAttribute('aria-invalid')
+  if (state === 'error' || dom.status.dataset.kind === 'error') {
     clearStatus()
-    state = 'idle'
+    setState('idle')
   }
 })
+dom.dontSaveKey.addEventListener('change', persistSettings)
 
-// ---------- 下载 ----------
-downloadBtn.addEventListener('click', () => {
-  if (!currentSvg) return
-  const blob = new Blob([currentSvg], { type: 'image/svg+xml' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `doodle_${Date.now()}.svg`
-  a.click()
-  URL.revokeObjectURL(url)
+// ---------- 设置区附加控件 ----------
+dom.valueMore.addEventListener('click', () => {
+  const willOpen = dom.valueDetail.hidden
+  dom.valueDetail.hidden = !willOpen
+  dom.valueMore.setAttribute('aria-expanded', String(willOpen))
 })
 
-// ---------- 复制代码 ----------
+dom.presetSelect.addEventListener('change', () => {
+  const v = dom.presetSelect.value
+  if (!v) return
+  dom.baseUrl.value = v // 仅填地址，保留手输能力
+  dom.baseUrl.removeAttribute('aria-invalid')
+  persistSettings()
+})
+
+dom.leadJump.addEventListener('click', () => {
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  dom.prompt.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' })
+  dom.prompt.focus({ preventScroll: true })
+})
+
+// ---------- 操作条：下载 / 复制 / 存画廊 / 分享 / 打印 ----------
+dom.download.addEventListener('click', () => {
+  const work = getWork()
+  if (work) downloadSvg(work.svg, work.mode)
+})
+
 function legacyCopy(text: string): boolean {
   const active = document.activeElement as HTMLElement | null
   const selection = window.getSelection()
@@ -413,7 +653,11 @@ function legacyCopy(text: string): boolean {
   ta.focus()
   ta.select()
   let ok = false
-  try { ok = document.execCommand('copy') } catch { ok = false }
+  try {
+    ok = document.execCommand('copy')
+  } catch {
+    ok = false
+  }
   ta.remove()
   if (active && typeof active.focus === 'function') active.focus()
   if (selection) {
@@ -423,7 +667,6 @@ function legacyCopy(text: string): boolean {
   return ok
 }
 
-/** 两级降级都失败时，留下一个不可见的已选中文本域，让 Ctrl/⌘+C 仍能生效。 */
 function leaveSelection(text: string): void {
   document.querySelectorAll('textarea.copy-fallback').forEach((el) => el.remove())
   const ta = document.createElement('textarea')
@@ -431,38 +674,49 @@ function leaveSelection(text: string): void {
   ta.readOnly = true
   ta.value = text
   ta.setAttribute('aria-hidden', 'true')
-  ta.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;border:0;padding:0'
+  ta.style.cssText =
+    'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;border:0;padding:0'
   document.body.appendChild(ta)
   ta.focus()
   ta.select()
 }
 
-copyBtn.addEventListener('click', async () => {
-  if (!currentSvg) return
+dom.copy.addEventListener('click', async () => {
+  const work = getWork()
+  if (!work) return
   try {
-    await navigator.clipboard.writeText(currentSvg)
+    await navigator.clipboard.writeText(work.svg)
     setStatus('SVG 代码已复制', 'ok')
     return
-  } catch { /* 降级到 execCommand */ }
-  if (legacyCopy(currentSvg)) {
+  } catch {
+    /* 降级到 execCommand */
+  }
+  if (legacyCopy(work.svg)) {
     setStatus('SVG 代码已复制', 'ok')
   } else {
-    leaveSelection(currentSvg)
-    setStatus('无法自动复制，代码已为你选中，按 Ctrl/⌘ + C 即可复制；也可点「下载 SVG」', 'error')
+    leaveSelection(work.svg)
+    setStatus(
+      '无法自动复制，代码已为你选中，按 Ctrl/⌘ + C 即可复制；也可点「下载 SVG」',
+      'error'
+    )
   }
 })
 
-// ---------- 存入画廊 ----------
-saveBtn.addEventListener('click', () => {
-  if (!currentSvg) return
+dom.save.addEventListener('click', () => {
+  const work = getWork()
+  if (!work || work.source === 'sample') return
+  clearUndo() // gallery_save 终止撤销窗口（§4.6）
   const result = addToGallery({
-    prompt: lastGeneratedPrompt || promptEl.value.trim(),
-    svg: currentSvg,
-    mode: currentSvgMode
+    prompt: work.prompt || lastGeneratedPrompt,
+    svg: work.svg,
+    mode: work.mode,
+    style: work.style
   })
   if (result.ok) {
     renderGallery()
+    clearHint()
     setStatus(`已存入画廊（${result.count}/${MAX_ITEMS}）`, 'ok')
+    track('gallery_save')
   } else if (result.reason === 'full') {
     showToast('画廊最多保存 50 张，请先删除几张再存入', 'warn')
   } else if (result.reason === 'quota') {
@@ -470,85 +724,90 @@ saveBtn.addEventListener('click', () => {
   } else {
     showToast('浏览器不允许本地保存，本次仍可下载', 'info')
   }
-  // 失败时画廊保持不变，不重复写左栏 status
 })
 
-// ---------- 画廊渲染 ----------
-function renderGallery(): void {
-  const items = loadGallery()
-  galleryCountEl.textContent = `${countGallery()} / ${MAX_ITEMS}`
-  if (items.length === 0) {
-    galleryEl.innerHTML = '<p class="empty-gallery" role="listitem">还没有作品，生成后点"存入画廊"。</p>'
-    return
+let shareBusy = false
+dom.shareBtn.addEventListener('click', async () => {
+  const work = getWork()
+  if (!work || shareBusy) return
+  shareBusy = true
+  dom.shareBtn.classList.add('is-busy')
+  dom.shareBtn.setAttribute('aria-busy', 'true')
+  const ok = await generateShareCard(work)
+  shareBusy = false
+  dom.shareBtn.classList.remove('is-busy')
+  dom.shareBtn.setAttribute('aria-busy', 'false')
+  if (!ok) setStatus('分享图生成失败，请稍后再试', 'error')
+})
+
+// ---------- 模块接线 ----------
+initHistory(onHistorySelect)
+initUndo({
+  renderGallery,
+  focusDel: (index: number) => {
+    const dels = Array.from(dom.gallery.querySelectorAll<HTMLButtonElement>('.del'))
+    dels[index]?.focus()
   }
-  galleryEl.innerHTML = ''
-  items.forEach((it) => galleryEl.appendChild(galleryCard(it)))
-}
+})
+initSelfTest()
+initExport()
+initPrint()
+initStylePicker()
 
-function galleryCard(it: GalleryItem): HTMLElement {
-  const card = document.createElement('div')
-  card.className = 'card'
-  card.setAttribute('role', 'listitem')
-  const modeLabel = it.mode === 'stickman' ? '火柴人' : '简笔画'
-  // 使用存入时的 prompt 快照，绝不实时读 promptEl.value
-  const promptText = it.prompt || lastGeneratedPrompt
-  const esc = escapeHtml(promptText)
-  let safeSvg = ''
-  try { safeSvg = sanitizeSvg(it.svg) } catch { safeSvg = '' }
-
-  card.innerHTML = `
-    <button type="button" class="thumb" aria-label="在画布中查看：${esc}">${safeSvg}</button>
-    <div class="meta">
-      <span class="tag tag-${it.mode}">${modeLabel}</span>
-      <p class="desc" title="${esc}">${esc}</p>
-    </div>
-    <button class="del" type="button" title="删除" aria-label="删除作品：${esc}（${modeLabel}）">✕</button>
-  `
-  const innerSvg = card.querySelector('.thumb svg')
-  if (innerSvg) innerSvg.setAttribute('aria-hidden', 'true')
-
-  const thumb = card.querySelector<HTMLButtonElement>('.thumb')
-  thumb?.addEventListener('click', () => {
-    if (!safeSvg) {
-      showToast('这幅作品的数据已损坏，无法显示', 'warn')
-      return
+initClear({
+  resetGeneration: () => {
+    if (totalTimer !== null) {
+      window.clearTimeout(totalTimer)
+      totalTimer = null
     }
-    lastGeneratedPrompt = promptText
-    renderSvg(safeSvg, it.mode)
-  })
-
-  const del = card.querySelector<HTMLButtonElement>('.del')
-  del?.addEventListener('click', (e) => {
-    e.stopPropagation()
-    const cards = Array.from(galleryEl.querySelectorAll<HTMLElement>('.card'))
-    const index = cards.indexOf(card)
-    const before = loadGallery()
-    const remaining = removeFromGallery(it.id)
-    if (remaining.length === before.length) {
-      // saveGallery 失败：返回的是删除前数组，让调用方感知
-      showToast('浏览器不允许本地保存，删除未能生效', 'warn')
-      return
+    if (attemptTimer !== null) {
+      window.clearTimeout(attemptTimer)
+      attemptTimer = null
     }
-    renderGallery()
-    setStatus('已从画廊删除', 'info')
-    // 焦点移到相邻卡片的 .del，无相邻则回到 #gallery（tabindex=-1）
-    const dels = Array.from(galleryEl.querySelectorAll<HTMLButtonElement>('.del'))
-    const next = dels[Math.min(index, dels.length - 1)]
-    if (next) next.focus()
-    else galleryEl.focus()
-  })
-  return card
-}
+    if (controller && !controller.signal.aborted) controller.abort()
+    controller = null
+    cancelReason = null
+    retryCount = 0
+    lastGeneratedPrompt = ''
+    dom.generate.textContent = '生成'
+    dom.generate.classList.remove('is-generating', 'is-cancelling')
+    dom.generate.setAttribute('aria-busy', 'false')
+    dom.generate.removeAttribute('aria-disabled')
+    dom.canvas.setAttribute('aria-busy', 'false')
+    showVeil(false)
+    setPrevOkBadge(false)
+    dom.chips.forEach((chip) => {
+      chip.disabled = false
+      chip.removeAttribute('title')
+    })
+    setState('idle')
+  },
+  clearFormAndSettings: () => {
+    dom.baseUrl.value = ''
+    dom.apiKey.value = ''
+    dom.model.value = ''
+    dom.prompt.value = ''
+    dom.dontSaveKey.checked = false
+    dom.presetSelect.value = ''
+    dom.settings.open = false
+    dom.valueDetail.hidden = true
+    dom.valueMore.setAttribute('aria-expanded', 'false')
+    clearAllInvalid()
+    updatePromptCount()
+    setMode('doodle')
+    // 注意：不重新 persistSettings()，否则会把空配置写回刚清空的 localStorage
+  },
+  renderGallery,
+  resetSelfTest
+})
 
-function escapeHtml(s: string): string {
-  const map: Record<string, string> = {
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  }
-  return s.replace(/[&<>"']/g, (c) => map[c] ?? c)
-}
-
-// ---------- 初始化 ----------
+// ---------- 初始化顺序：loadSettings → syncMobileOrder（DOM 注入前）→ 其余 ----------
 loadSettings()
-setMode('doodle') // 同步 aria-pressed
+initLayout() // C-04：内部同步调用 syncMobileOrder()
+setMode('doodle')
 updatePromptCount()
-renderGallery() // 同步计数
+showSamples(onSampleSelect)
+renderGallery()
+refreshActions()
+setState('idle')
+track('page_view')

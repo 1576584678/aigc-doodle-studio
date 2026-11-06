@@ -13,10 +13,11 @@
 
 1. Fork 后从 `main` 建分支，分支名建议 `fix/xxx` 或 `feat/xxx`。
 2. 保持零运行时依赖：新增能力优先用浏览器原生 API 实现；确需引入依赖请在 Issue 里先说明理由。
-3. 提交前执行 `npm run build`（含 `tsc --noEmit`）。
-4. 涉及 `src/sanitize.ts` 的改动，必须同时补充对应的攻击向量测试用例；安全过滤的放宽需要明确论证。
-5. PR 描述里写清：解决了什么、怎么验证、是否影响现有 localStorage 数据格式。
-6. 不要提交 `dist/`、`node_modules/`、`.workbuddy/` 或任何含凭据的文件。
+3. 提交前执行 `npm run build`（已串入 `scripts/verify.mjs` 静态门禁 + `tsc --noEmit`）。
+4. 执行 `npm test`（向量条数 / 违禁词 / 运行时依赖 / 示例体积）与 `npm run test:browser`（真实浏览器跑 SVG 过滤与交互断言；本机无可用浏览器时会明确跳过）。
+5. 涉及 `src/sanitize.ts` 的改动，必须同时在 `tests/sanitize-vectors.mjs` 补充攻击向量样本；安全过滤的放宽需要明确论证。
+6. PR 描述里写清：解决了什么、怎么验证、是否影响现有 localStorage 数据格式。
+7. 不要提交 `dist/`、`node_modules/`、`.workbuddy/` 或任何含凭据的文件。
 
 ## 设计原则
 

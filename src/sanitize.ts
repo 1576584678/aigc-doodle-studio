@@ -63,11 +63,18 @@ function isDangerousStyle(value: string): boolean {
 /** 任意属性值的兜底：脚本协议、CSS 表达式、data: 一律不允许出现在属性值里。 */
 function isDangerousValue(value: string): boolean {
   const v = squash(value)
+  // 纵深防御：外部 paint server（fill="url(https://...)" / url(//...)）可发起外链请求，
+  // 但本地内部引用 url(#id) 必须保留，不做「凡 url( 一律拦」的一刀切。
+  const externalPaint =
+    /url\(\s*['"]?\s*(?:https?:|\/\/)/i.test(value) ||
+    v.includes('url(http') ||
+    v.includes('url(//')
   return (
     v.includes('javascript:') ||
     v.includes('vbscript:') ||
     v.includes('data:') ||
-    v.includes('expression(')
+    v.includes('expression(') ||
+    externalPaint
   )
 }
 

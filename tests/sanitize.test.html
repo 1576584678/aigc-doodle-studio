@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FR-12 · sanitize.ts 安全回归测试</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f5f7fb;
+        --card: #ffffff;
+        --ink: #1f2937;
+        --muted: #5b6577;
+        --line: #dfe4ed;
+        --pass: #0f7b3f;
+        --pass-bg: #e9f7ef;
+        --fail: #b42318;
+        --fail-bg: #fdecea;
+        --accent: #2b5cb8;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 28px 20px 56px;
+        background: var(--bg);
+        color: var(--ink);
+        font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+      main { max-width: 1080px; margin: 0 auto; }
+      h1 { margin: 0 0 6px; font-size: 22px; letter-spacing: .2px; }
+      .lede { margin: 0 0 18px; color: var(--muted); font-size: 13px; }
+      #summary {
+        margin: 0 0 16px;
+        padding: 14px 18px;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        font-size: 16px;
+        font-weight: 600;
+      }
+      #summary[data-state="pass"] { border-color: var(--pass); color: var(--pass); background: var(--pass-bg); }
+      #summary[data-state="fail"] { border-color: var(--fail); color: var(--fail); background: var(--fail-bg); }
+      #summary[data-state="running"] { color: var(--muted); }
+      .hint { margin: 0 0 16px; color: var(--muted); font-size: 12px; }
+      .hint code, pre code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        background: #eef1f7;
+        padding: 1px 5px;
+        border-radius: 4px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        overflow: hidden;
+        font-size: 13px;
+      }
+      th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+      th { background: #eef1f7; color: var(--muted); font-weight: 600; white-space: nowrap; }
+      tr:last-child td { border-bottom: 0; }
+      td.idx { color: var(--muted); width: 44px; }
+      td.name { min-width: 250px; }
+      td.expect { white-space: nowrap; width: 82px; }
+      td.state { white-space: nowrap; width: 76px; font-weight: 600; }
+      tr.pass td.state { color: var(--pass); }
+      tr.fail td.state { color: var(--fail); }
+      tr.fail td { background: var(--fail-bg); }
+      td.reason { color: var(--muted); word-break: break-word; }
+      tr.fail td.reason { color: var(--fail); }
+      details {
+        margin-top: 18px;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 12px 16px;
+      }
+      summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+      pre {
+        margin: 12px 0 0;
+        padding: 12px;
+        background: #f7f8fb;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        max-height: 460px;
+        overflow: auto;
+        font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        white-space: pre-wrap;
+        word-break: break-all;
+        color: var(--ink);
+      }
+      h2 { font-size: 15px; margin: 24px 0 8px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>FR-12 · SVG 白名单安全回归测试</h1>
+      <p class="lede">在真实浏览器 DOMParser / XMLSerializer 环境中逐条调用 <code>src/sanitize.ts</code>，验证攻击向量被移除或拒绝、合法简笔画过滤后仍保留 viewBox / xmlns。</p>
+      <p class="hint">访问方式：先 <code>npm run dev</code>，再打开 <code>/tests/sanitize.test.html</code>。结构化结果挂在 <code>window.__SANITIZE_TEST_RESULT__</code>；本页不写入 localStorage、不发起任何外部网络请求。</p>
+
+      <p id="summary" data-state="running" role="status" aria-live="polite">正在运行测试…</p>
+
+      <table aria-label="回归向量逐条结果">
+        <thead>
+          <tr><th>#</th><th>样本名称</th><th>期望</th><th>结果</th><th>失败原因 / 说明</th></tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+
+      <h2>结构化结果（供自动化读取）</h2>
+      <pre id="machine">等待测试完成…</pre>
+
+      <details>
+        <summary>查看各样本过滤后的输出（前 300 字符）</summary>
+        <pre id="outputs">等待测试完成…</pre>
+      </details>
+    </main>
+
+    <!-- 兜底：若 ESM 模块未能执行（例如直接以 file:// 打开、或 Vite 未启动），
+         自动化读取 __SANITIZE_TEST_RESULT__ 时也能得到明确的失败结果，而不是 undefined。 -->
+    <script>
+      window.__SANITIZE_TEST_RESULT__ = {
+        total: 0,
+        passed: 0,
+        failed: 1,
+        ok: false,
+        failures: [{ name: '模块加载', expect: '-', reasons: ['ESM 模块未执行，请通过 Vite dev server 访问本页'] }]
+      };
+    </script>
+
+    <script type="module">
+      import { sanitizeSvg } from '/src/sanitize.ts'
+      import { vectors } from './sanitize-vectors.mjs'
+
+      // 大小写不敏感的包含判断：用于抵御 JaVaScRiPt: 之类大小写混淆
+      const contains = (haystack, needle) =>
+        String(haystack).toLowerCase().includes(String(needle).toLowerCase())
+
+      const rows = []
+      const outputLines = []
+
+      try {
+        if (typeof sanitizeSvg !== 'function') throw new Error('sanitizeSvg 未正确导出')
+        if (!Array.isArray(vectors)) throw new Error('vectors 不是数组')
+
+        for (let i = 0; i < vectors.length; i += 1) {
+          const v = vectors[i]
+          const mustContain = Array.isArray(v.mustContain) ? v.mustContain : []
+          const mustNotContain = Array.isArray(v.mustNotContain) ? v.mustNotContain : []
+          const reasons = []
+          let threw = false
+          let out = ''
+          let thrownMessage = ''
+
+          try {
+            out = sanitizeSvg(v.svg)
+          } catch (err) {
+            threw = true
+            thrownMessage = err && err.message ? err.message : String(err)
+          }
+
+          if (v.expect === 'reject') {
+            // 通过条件：抛错，或输出中不含任何 mustNotContain 敏感片段
+            if (!threw) {
+              const leaked = mustNotContain.filter((token) => contains(out, token))
+              if (leaked.length) reasons.push('危险片段未被移除或拒绝：' + leaked.join('、'))
+            }
+          } else if (v.expect === 'accept') {
+            // 通过条件：不抛错 + 含全部 mustContain + 不含任何 mustNotContain
+            if (threw) {
+              reasons.push('合法样本被拒绝（抛错）：' + thrownMessage)
+            } else {
+              const missing = mustContain.filter((token) => !contains(out, token))
+              if (missing.length) reasons.push('缺少必要内容：' + missing.join('、'))
+              const leaked = mustNotContain.filter((token) => contains(out, token))
+              if (leaked.length) reasons.push('输出含禁止片段：' + leaked.join('、'))
+            }
+          } else {
+            reasons.push('expect 值非法：' + String(v.expect))
+          }
+
+          rows.push({
+            index: i + 1,
+            name: String(v.name),
+            expect: String(v.expect),
+            ok: reasons.length === 0,
+            reasons,
+            note: threw ? 'sanitizeSvg 抛错（按拒绝处理）' : ''
+          })
+          outputLines.push(
+            '[' + (i + 1) + '] ' + String(v.name) + '\n' +
+            (threw ? '  (抛错，无输出)' : '  ' + String(out).slice(0, 300))
+          )
+        }
+      } catch (err) {
+        rows.push({
+          index: rows.length + 1,
+          name: '执行异常',
+          expect: '-',
+          ok: false,
+          reasons: [err && err.message ? err.message : String(err)],
+          note: ''
+        })
+      }
+
+      const passed = rows.filter((r) => r.ok).length
+      const failed = rows.length - passed
+      const failures = rows
+        .filter((r) => !r.ok)
+        .map((r) => ({ name: r.name, expect: r.expect, reasons: r.reasons }))
+
+      const result = { total: rows.length, passed, failed, ok: failed === 0, failures }
+      window.__SANITIZE_TEST_RESULT__ = result
+
+      // ---------- 渲染（全部用 textContent，避免把不可信字符串当 HTML 解析） ----------
+      const summary = document.getElementById('summary')
+      summary.textContent = failed === 0
+        ? '全部通过：共 ' + result.total + ' 条 · 通过 ' + passed + ' · 失败 ' + failed
+        : '存在失败：共 ' + result.total + ' 条 · 通过 ' + passed + ' · 失败 ' + failed
+      summary.setAttribute('data-state', failed === 0 ? 'pass' : 'fail')
+
+      const tbody = document.getElementById('rows')
+      const frag = document.createDocumentFragment()
+      for (const r of rows) {
+        const tr = document.createElement('tr')
+        tr.className = r.ok ? 'pass' : 'fail'
+        const cells = [
+          ['idx', String(r.index)],
+          ['name', r.name],
+          ['expect', r.expect],
+          ['state', r.ok ? '通过' : '失败'],
+          ['reason', r.reasons.length ? r.reasons.join('；') : (r.note || '符合预期')]
+        ]
+        for (const [cls, text] of cells) {
+          const td = document.createElement('td')
+          td.className = cls
+          td.textContent = text
+          tr.appendChild(td)
+        }
+        frag.appendChild(tr)
+      }
+      tbody.appendChild(frag)
+
+      document.getElementById('machine').textContent = JSON.stringify(result, null, 2)
+      document.getElementById('outputs').textContent = outputLines.join('\n\n')
+    </script>
+  </body>
+</html>

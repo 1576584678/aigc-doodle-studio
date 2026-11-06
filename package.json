@@ -6,8 +6,11 @@
   "description": "AIGC 简笔画 / 火柴人 SVG 生成小平台 MVP",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "build": "node scripts/verify.mjs && tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "node scripts/verify.mjs",
+    "verify": "node scripts/verify.mjs",
+    "test:browser": "node scripts/browser-test.mjs"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

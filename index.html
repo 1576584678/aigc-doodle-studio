@@ -17,29 +17,83 @@
     </header>
 
     <main class="layout">
-      <!-- 左侧：输入 + 设置 -->
+      <!-- 左侧：价值说明 + 设置 + 输入 + 状态（#status 留在左栏末块，不包进 details） -->
       <section class="panel left">
-        <details class="settings" open>
-          <summary>⚙️ 模型设置</summary>
-          <label>
-            API Base URL
-            <input id="baseUrl" type="text" placeholder="https://api.example.com/v1" />
-          </label>
-          <label>
-            API Key
-            <input id="apiKey" type="password" placeholder="sk-..." />
-          </label>
-          <label>
-            Model
-            <input id="model" type="text" placeholder="填写你的模型名称" />
-          </label>
-          <p class="key-warning">设置保存在本机浏览器，不会上传；但 API Key 以明文存放，公用电脑请勿保存。本站不收费，模型调用费用由你与所选服务商结算；浏览器直连要求端点为 HTTPS 且允许跨域（CORS）。</p>
+        <div class="value-card">
+          <p class="value-title">写一句话，得到一张能直接下载、打印、转发的简笔画。</p>
+          <ul class="value-facts">
+            <li class="value-fact">本站不收费</li>
+            <li class="value-fact">模型与 Key 自备</li>
+            <li class="value-fact">数据仅存本机</li>
+          </ul>
+          <button type="button" class="value-more" aria-expanded="false">费用与隐私说明</button>
+          <div class="value-detail" hidden>
+            本站不收费、不设账号；图片由你填写的模型服务完成，该服务可能向你收取调用费用，费用与本站无关。
+            API Key、描述内容、作品仅保存在本机浏览器，本站无服务器、不接收、不存储；数据可随时在设置区一键清除。
+            请求直接发往你填写的服务商，可能涉及跨域与跨境；浏览器直连要求端点为 HTTPS 且允许跨域（CORS），本站为纯前端无法代为转发。
+            仅统计匿名访问与操作次数，不采集输入内容；不使用 Cookie 与第三方追踪脚本。
+          </div>
+        </div>
+
+        <details class="settings">
+          <summary class="settings-head">
+            <span>模型设置</span>
+            <span class="settings-hint">可选 · 不填也能看示例</span>
+          </summary>
+          <div class="settings-body">
+            <p class="settings-section-title">配置与费用</p>
+            <p class="notice">本站不收费，也不设账号；图片生成由你填写的模型服务完成，该服务可能向你收取调用费用，费用与本站无关。请求直接发往你填写的服务商，可能涉及跨境；浏览器直连要求端点为 HTTPS 且允许跨域（CORS），本站为纯前端无法代为转发。</p>
+            <p class="notice">API Key、描述内容、作品仅保存在本机浏览器，本站无服务器、不接收、不存储。仅统计匿名访问与操作次数，不采集输入内容；不使用 Cookie 与第三方追踪脚本。</p>
+            <p class="key-warning">设置保存在本机浏览器，不会上传；但 API Key 以明文存放，公用电脑请勿保存。本站不收费，模型调用费用由你与所选服务商结算；浏览器直连要求端点为 HTTPS 且允许跨域（CORS）。</p>
+
+            <div class="settings-section">
+              <label>
+                API Base URL
+                <input id="baseUrl" type="text" placeholder="https://api.example.com/v1" autocomplete="off" spellcheck="false" />
+              </label>
+              <div class="preset-row">
+                <select class="preset-select" aria-label="常用端点地址格式（仅填地址）">
+                  <option value="">选择示例地址格式（仅填地址）</option>
+                  <option value="https://api.example.com/v1">示例：…/v1</option>
+                  <option value="https://api.example.com/v1/chat/completions">示例：…/chat/completions</option>
+                </select>
+                <span class="preset-note">仅填地址，本站不验证第三方服务；测试会产生一次极小的模型调用。</span>
+              </div>
+              <label>
+                API Key
+                <input id="apiKey" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" />
+              </label>
+              <label>
+                Model
+                <input id="model" type="text" placeholder="填写你的模型名称" autocomplete="off" spellcheck="false" />
+              </label>
+            </div>
+
+            <button type="button" class="btn-test">测试连接</button>
+            <div class="test-result" role="status" aria-live="polite" aria-atomic="true"></div>
+
+            <label class="check-row">
+              <input type="checkbox" />
+              <span class="check-text">本次不保存 Key</span>
+              <span class="check-note">选用后 Key 仅存内存，刷新即失效。</span>
+            </label>
+
+            <button type="button" class="link-danger">清除本机数据</button>
+            <p class="clear-note">仅清除本站保存在本机的数据；清除过程不联网。</p>
+          </div>
         </details>
 
         <label class="mode-label">生成模式</label>
         <div class="mode-toggle" role="group" aria-label="生成模式">
           <button id="mode-doodle" class="mode-btn active" data-mode="doodle" aria-pressed="true" type="button">🎨 简笔画</button>
           <button id="mode-stickman" class="mode-btn" data-mode="stickman" aria-pressed="false" type="button">🤸 火柴人</button>
+        </div>
+
+        <label class="style-label">画风</label>
+        <div class="style-picker" role="group" aria-label="画风">
+          <button type="button" class="style-btn is-active" data-style="minimal" aria-pressed="true">极简线稿</button>
+          <button type="button" class="style-btn" data-style="cute" aria-pressed="false">圆润可爱</button>
+          <button type="button" class="style-btn" data-style="coloring" aria-pressed="false">涂色线稿</button>
         </div>
 
         <label class="prompt-label" for="prompt">描述你要画的内容</label>
@@ -66,21 +120,34 @@
         <div id="status" class="status" role="status" aria-live="polite" aria-atomic="true"></div>
       </section>
 
-      <!-- 右侧：展示 + 画廊 -->
+      <!-- 右侧：费用摘要 + 画布 + 历史 + 操作条 + 画廊 -->
       <section class="panel right">
+        <div class="mobile-lead">
+          <span class="mobile-lead-text">本站不收费 · 模型与 API Key 由你自备 · 数据仅存本机</span>
+          <button type="button" class="lead-jump" aria-controls="prompt">开始创作</button>
+        </div>
+
         <div class="stage">
           <div id="canvas" class="canvas empty">
             <span class="placeholder">生成的图会显示在这里</span>
           </div>
+          <div class="history-strip" aria-label="本次会话历史"></div>
           <div class="stage-actions">
-            <button id="download" type="button" disabled>下载 SVG</button>
-            <button id="copy" type="button" disabled>复制代码</button>
-            <button id="save" type="button" disabled>存入画廊</button>
+            <button id="download" class="act-btn" type="button" disabled>下载 SVG</button>
+            <div class="act-wrap">
+              <button class="act-btn" type="button" data-action="export-png" aria-expanded="false" aria-haspopup="true" disabled>导出 PNG</button>
+              <div class="export-panel" hidden></div>
+            </div>
+            <button id="save" class="act-btn" type="button" disabled>存入画廊</button>
+            <button id="copy" class="act-btn act-btn--quiet" type="button" disabled>复制代码</button>
+            <button class="act-btn act-btn--quiet" type="button" data-action="share" disabled>生成分享图</button>
+            <button class="act-btn act-btn--quiet" type="button" data-action="print" disabled>打印 / PDF</button>
           </div>
         </div>
 
-        <h2 class="gallery-title">🖼️ 画廊 <span id="gallery-count" aria-live="polite">0 / 50</span></h2>
+        <h2 class="gallery-title">🖼️ 画廊 <span id="gallery-count" class="gallery-count" aria-live="off">0 / 50</span></h2>
         <div id="gallery" class="gallery" role="list" aria-label="画廊作品" tabindex="-1"></div>
+        <p class="print-caption">AIGC 简笔画工坊 · 本站不收费，模型与 API Key 由你自备</p>
       </section>
     </main>
 
@@ -90,6 +157,21 @@
     </footer>
 
     <div class="toast-region" id="toast-region" aria-live="polite"></div>
+
+    <dialog class="confirm-dialog" aria-label="清除本机数据">
+      <h2 class="confirm-title">清除本机数据？<span class="confirm-tag">不可恢复</span></h2>
+      <p class="confirm-desc">将删除以下数据，删除后无法恢复：</p>
+      <ul class="confirm-list">
+        <li class="confirm-item">API Key 与模型配置（Base URL / Model / 端点预设）</li>
+        <li class="confirm-item">全部画廊作品（含描述与生成参数）</li>
+        <li class="confirm-item">本次会话的画布历史与当前作品</li>
+      </ul>
+      <p class="confirm-note">仅清除本站保存在本机的数据，不会影响其他站点；清除过程不联网。</p>
+      <div class="confirm-actions">
+        <button type="button" class="btn-quiet">取消</button>
+        <button type="button" class="btn-danger">确认清除</button>
+      </div>
+    </dialog>
 
     <script type="module" src="./src/main.ts"></script>
   </body>
