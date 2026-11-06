@@ -250,9 +250,9 @@
         check('首屏：#gallery-count = 0 / 50',
           doc.querySelector('#gallery-count').textContent.trim() === '0 / 50',
           '实际 ' + doc.querySelector('#gallery-count').textContent)
-        check('首屏：details.settings 未展开',
-          doc.querySelector('details.settings').open === false,
-          '设置区默认展开')
+        check('首屏：.settings-dialog 默认关闭',
+          doc.querySelector('.settings-dialog').open === false,
+          '设置弹框默认展开')
         check('首屏：无 .status.error', !doc.querySelector('.status.error'), '首屏出现错误态')
 
         tiles = Array.from(doc.querySelectorAll('.sample-tile'))
@@ -274,6 +274,9 @@
           doc.querySelectorAll('.history-item').length === 1 &&
           doc.querySelector('.history-count').textContent.trim() === '1 / 5',
           '实际历史 ' + doc.querySelectorAll('.history-item').length + ' 项')
+        check('点第 1 张示例 → 显示「返回示例」按钮（可缩回示例墙）',
+          doc.querySelector('.canvas-back') && doc.querySelector('.canvas-back').hidden === false,
+          '返回示例按钮未显示')
 
         for (let i = 1; i < tiles.length; i += 1) tiles[i].click()
         await sleepFrames(2)
@@ -434,7 +437,7 @@
         doc.querySelector('.link-danger').click()
         await sleepFrames(2)
         const dialog = doc.querySelector('dialog.confirm-dialog')
-        const quiet = doc.querySelector('.btn-quiet')
+        const quiet = doc.querySelector('.confirm-dialog .btn-quiet')
         check('清除事务 → 预置数据 + 撤销窗口已建立',
           undoWasOpen && dialog.open, '撤销窗口或 dialog 未就绪')
         check('清除事务 → dialog 默认焦点在 .btn-quiet（取消）',

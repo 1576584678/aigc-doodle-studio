@@ -35,8 +35,10 @@ export const dom = {
   styleBtns: all<HTMLButtonElement>('.style-btn'),
   stylePicker: one<HTMLElement>('.style-picker'),
 
-  settings: one<HTMLDetailsElement>('.settings'),
-  settingsHead: one<HTMLElement>('.settings-head'),
+  settingsBtn: one<HTMLButtonElement>('[data-action="open-settings"]'),
+  settingsDialog: one<HTMLDialogElement>('.settings-dialog'),
+  settingsClose: one<HTMLButtonElement>('[data-action="close-settings"]'),
+  canvasBack: one<HTMLButtonElement>('.canvas-back'),
   valueMore: one<HTMLButtonElement>('.value-more'),
   valueDetail: one<HTMLElement>('.value-detail'),
   presetSelect: one<HTMLSelectElement>('.preset-select'),

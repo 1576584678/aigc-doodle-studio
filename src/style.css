@@ -29,28 +29,93 @@ body {
   grid-template-columns: 360px 1fr;
   gap: 20px;
   padding: 16px 28px 40px;
-  align-items: start;
+  align-items: stretch;
+  /* 顶栏 + 页脚约 120px，整体恰好一屏，避免整页出现滚动条 */
+  height: calc(100vh - 120px);
+  height: calc(100dvh - 120px);
+  max-width: 1120px;
+  margin: 0 auto;
 }
 
 .panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 18px;
 }
 
-/* 设置区 */
-.settings { margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 12px; }
-.settings summary { cursor: pointer; font-weight: 600; font-size: 14px; }
-.settings label,
-.left > label {
+/* 设置区：左栏「模型设置」入口 + 弹框内表单 */
+.settings-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  margin-bottom: 16px;
+  min-height: 44px;
+  padding: 0 12px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+}
+.settings-btn:hover { background: var(--primary-050); border-color: var(--primary-300); }
+.settings-btn-label { font-weight: 600; }
+.settings-hint { font-size: 12px; font-weight: 400; color: var(--info-text); text-align: right; overflow-wrap: anywhere; }
+
+.left > label,
+.settings-dialog-body label {
   display: flex;
   flex-direction: column;
   gap: 6px;
   font-size: 13px;
-  color: var(--muted);
+  color: var(--info-text);
   margin-top: 12px;
 }
+
+/* 设置弹框 */
+.settings-dialog {
+  width: min(440px, calc(100vw - 32px));
+  padding: 24px;
+  background: var(--panel);
+  border: 0;
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(31, 35, 41, .18);
+  color: var(--text);
+}
+.settings-dialog::backdrop { background: var(--overlay); }
+.settings-dialog-head { margin-bottom: 12px; }
+.settings-dialog-head h2 { margin: 0; font-size: 18px; }
+.settings-dialog-sub { margin: 4px 0 0; font-size: 12px; color: var(--info-text); }
+.settings-dialog-body { min-width: 0; }
+.settings-dialog-body .settings-section { margin-top: 4px; }
+.settings-dialog-actions { display: flex; justify-content: flex-end; margin-top: 16px; }
+.settings-dialog-actions .btn-quiet { min-width: 96px; }
+
+/* 画布：返回示例墙 */
+.canvas-back {
+  align-self: flex-start;
+  width: auto;
+  margin: 0 0 10px;
+  padding: 6px 12px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--primary-d);
+  cursor: pointer;
+}
+.canvas-back:hover { background: var(--primary-050); border-color: var(--primary-300); }
+.canvas-back[hidden] { display: none; }
 input, textarea {
   font: inherit;
   font-size: 14px;
@@ -82,6 +147,7 @@ input:focus, textarea:focus { border-color: var(--primary); background: #fff; }
 
 .prompt-label { display: block; margin-top: 14px; font-size: 13px; color: var(--muted); }
 textarea { resize: vertical; margin-top: 8px; width: 100%; }
+.panel.left textarea { flex: 1 1 auto; min-height: 70px; }
 
 .primary {
   width: 100%;
@@ -107,7 +173,7 @@ textarea { resize: vertical; margin-top: 8px; width: 100%; }
 .stage { display: flex; flex-direction: column; align-items: center; }
 .canvas {
   width: 100%;
-  max-width: 460px;
+  max-width: 320px;
   aspect-ratio: 1 / 1;
   border: 1px dashed var(--border);
   border-radius: var(--radius);
@@ -139,11 +205,15 @@ textarea { resize: vertical; margin-top: 8px; width: 100%; }
 .stage-actions button:disabled { opacity: .45; cursor: default; }
 
 /* 画廊 */
-.gallery-title { font-size: 16px; margin: 26px 0 12px; }
+.gallery-title { font-size: 16px; margin: 18px 0 10px; }
 .gallery {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: 14px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 .card {
   position: relative;
@@ -264,7 +334,7 @@ textarea { resize: vertical; margin-top: 8px; width: 100%; }
   .layout{padding:12px 14px 32px;gap:14px}
   .panel{padding:14px}
   .canvas{max-width:100%}
-  .gallery{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px}
+  .gallery{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;max-height:none;overflow:visible;padding-right:0}
   .layout,.panel,.stage,.canvas,.examples,.chip,.mode-toggle,.mode-btn,.stage-actions,.stage-actions button,.toast-region,.toast,.card,.meta{min-width:0}
 }
 
@@ -330,15 +400,7 @@ textarea { resize: vertical; margin-top: 8px; width: 100%; }
 .value-detail[hidden]{display:none}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 
-/* ---------- 设置区（默认收起） ---------- */
-.settings-head{list-style:none;display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:44px;padding:0 12px;background:var(--surface-1);border:1px solid var(--border);border-radius:8px;font-size:14px;font-weight:600;color:var(--text);cursor:pointer}
-.settings-head::-webkit-details-marker{display:none}
-.settings-head::after{content:"";flex:0 0 auto;width:6px;height:6px;border-right:2px solid var(--info-text);border-bottom:2px solid var(--info-text);transform:rotate(45deg);transition:transform .15s}
-.settings[open] .settings-head{border-bottom-left-radius:0;border-bottom-right-radius:0}
-.settings[open] .settings-head::after{transform:rotate(135deg)}
-.settings[open] .settings-hint{display:none}
-.settings-hint{font-size:12px;font-weight:400;color:var(--info-text);text-align:right;overflow-wrap:anywhere}
-.settings-body{padding-top:12px;min-width:0}
+/* ---------- 设置区 ---------- */
 .settings-section-title{margin:0 0 8px;font-size:13px;font-weight:600;color:var(--info-text)}
 .settings-section{min-width:0}
 .notice{margin:8px 0;padding:10px 12px;background:var(--surface-1);border:1px solid var(--border);border-radius:8px;font-size:12px;line-height:1.6;color:var(--info-text);overflow-wrap:anywhere}
@@ -498,7 +560,6 @@ textarea { resize: vertical; margin-top: 8px; width: 100%; }
   .sample-tile:hover{background:var(--primary-050);border:1px solid var(--primary-300);box-shadow:0 1px 2px rgba(31,35,41,.06)}
   .style-btn:hover:not(.is-active):not(:disabled){background:var(--primary-050);border-color:var(--primary-300);color:var(--primary-d)}
   .export-opt:hover:not(.is-active){background:var(--primary-050);border-color:var(--primary-300);color:var(--primary-d)}
-  .settings-head:hover{background:var(--primary-050);border-color:var(--primary-300)}
   .lead-jump:hover{background:var(--primary-050);color:var(--primary-800);border-color:var(--primary-800)}
   .btn-test:hover:not(:disabled){background:var(--primary-050);border-color:var(--primary-300);color:var(--primary-d)}
   .history-item:hover{border-color:var(--primary-300)}
@@ -513,13 +574,15 @@ textarea { resize: vertical; margin-top: 8px; width: 100%; }
   .mobile-lead{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:8px 12px;margin-bottom:12px;background:var(--surface-1);border:1px solid var(--border);border-radius:8px;min-width:0;max-width:100%}
   .mobile-lead-text{flex:1 1 100%;min-width:0;font-size:12px;line-height:1.5;color:var(--info-text);overflow-wrap:anywhere}
   .style-btn{min-height:44px;font-size:12px;min-width:0}
-  .settings-head{min-height:44px}
-  .settings-hint{flex:1 1 100%;text-align:left}
   .value-facts{gap:6px 12px}
   .history-item{flex-basis:52px;width:52px;height:52px}
   .history-item:hover::after,.history-item:focus-visible::after{max-width:min(220px,calc(100vw - 40px))}
   .lead-jump{min-height:44px}
-  .samples-grid,.sample-grid,.history-strip,.stage-actions,.export-panel,.mobile-lead,.value-card,.settings-body,.preset-row,.confirm-dialog{min-width:0;max-width:100%}
+  .panel{display:block;overflow:visible}
+  .layout{height:auto}
+  .panel.right .gallery{flex:none;min-height:0;max-height:none;overflow:visible;padding-right:0}
+  .panel.left textarea{flex:none;min-height:90px}
+  .samples-grid,.sample-grid,.history-strip,.stage-actions,.export-panel,.mobile-lead,.value-card,.preset-row,.confirm-dialog{min-width:0;max-width:100%}
 }
 
 /* ---------- ≤375px ---------- */
@@ -533,7 +596,7 @@ textarea { resize: vertical; margin-top: 8px; width: 100%; }
   .sample-wall{padding:8px}
   .style-picker{gap:4px}
   .style-btn{font-size:12px}
-  .gallery{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px}
+  .gallery{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;max-height:none;overflow:visible;padding-right:0}
   .confirm-dialog{width:calc(100vw - 24px);padding:20px}
   .confirm-actions .btn-quiet,.confirm-actions .btn-danger{flex:1 1 0}
   .mobile-lead-text{font-size:12px}

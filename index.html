@@ -35,53 +35,10 @@
           </div>
         </div>
 
-        <details class="settings">
-          <summary class="settings-head">
-            <span>模型设置</span>
-            <span class="settings-hint">可选 · 不填也能看示例</span>
-          </summary>
-          <div class="settings-body">
-            <p class="settings-section-title">配置与费用</p>
-            <p class="notice">本站不收费，也不设账号；图片生成由你填写的模型服务完成，该服务可能向你收取调用费用，费用与本站无关。请求直接发往你填写的服务商，可能涉及跨境；浏览器直连要求端点为 HTTPS 且允许跨域（CORS），本站为纯前端无法代为转发。</p>
-            <p class="notice">API Key、描述内容、作品仅保存在本机浏览器，本站无服务器、不接收、不存储。仅统计匿名访问与操作次数，不采集输入内容；不使用 Cookie 与第三方追踪脚本。</p>
-            <p class="key-warning">设置保存在本机浏览器，不会上传；但 API Key 以明文存放，公用电脑请勿保存。本站不收费，模型调用费用由你与所选服务商结算；浏览器直连要求端点为 HTTPS 且允许跨域（CORS）。</p>
-
-            <div class="settings-section">
-              <label>
-                API Base URL
-                <input id="baseUrl" type="text" placeholder="https://api.example.com/v1" autocomplete="off" spellcheck="false" />
-              </label>
-              <div class="preset-row">
-                <select class="preset-select" aria-label="常用端点地址格式（仅填地址）">
-                  <option value="">选择示例地址格式（仅填地址）</option>
-                  <option value="https://api.example.com/v1">示例：…/v1</option>
-                  <option value="https://api.example.com/v1/chat/completions">示例：…/chat/completions</option>
-                </select>
-                <span class="preset-note">仅填地址，本站不验证第三方服务；测试会产生一次极小的模型调用。</span>
-              </div>
-              <label>
-                API Key
-                <input id="apiKey" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" />
-              </label>
-              <label>
-                Model
-                <input id="model" type="text" placeholder="填写你的模型名称" autocomplete="off" spellcheck="false" />
-              </label>
-            </div>
-
-            <button type="button" class="btn-test">测试连接</button>
-            <div class="test-result" role="status" aria-live="polite" aria-atomic="true"></div>
-
-            <label class="check-row">
-              <input type="checkbox" />
-              <span class="check-text">本次不保存 Key</span>
-              <span class="check-note">选用后 Key 仅存内存，刷新即失效。</span>
-            </label>
-
-            <button type="button" class="link-danger">清除本机数据</button>
-            <p class="clear-note">仅清除本站保存在本机的数据；清除过程不联网。</p>
-          </div>
-        </details>
+        <button type="button" class="settings-btn" data-action="open-settings" aria-haspopup="dialog" aria-controls="settings-dialog">
+          <span class="settings-btn-label">模型设置</span>
+          <span class="settings-hint">可选 · 不填也能看示例</span>
+        </button>
 
         <label class="mode-label">生成模式</label>
         <div class="mode-toggle" role="group" aria-label="生成模式">
@@ -128,6 +85,7 @@
         </div>
 
         <div class="stage">
+          <button type="button" class="canvas-back" data-action="back-to-samples" hidden>← 返回示例</button>
           <div id="canvas" class="canvas empty">
             <span class="placeholder">生成的图会显示在这里</span>
           </div>
@@ -157,6 +115,57 @@
     </footer>
 
     <div class="toast-region" id="toast-region" aria-live="polite"></div>
+
+    <dialog class="settings-dialog" id="settings-dialog" aria-labelledby="settings-dialog-title">
+      <header class="settings-dialog-head">
+        <h2 id="settings-dialog-title">模型设置</h2>
+        <p class="settings-dialog-sub">可选 · 不填也能看示例</p>
+      </header>
+      <div class="settings-dialog-body">
+        <p class="settings-section-title">配置与费用</p>
+        <p class="notice">本站不收费，也不设账号；图片生成由你填写的模型服务完成，该服务可能向你收取调用费用，费用与本站无关。请求直接发往你填写的服务商，可能涉及跨境；浏览器直连要求端点为 HTTPS 且允许跨域（CORS），本站为纯前端无法代为转发。</p>
+        <p class="notice">API Key、描述内容、作品仅保存在本机浏览器，本站无服务器、不接收、不存储。仅统计匿名访问与操作次数，不采集输入内容；不使用 Cookie 与第三方追踪脚本。</p>
+        <p class="key-warning">设置保存在本机浏览器，不会上传；但 API Key 以明文存放，公用电脑请勿保存。本站不收费，模型调用费用由你与所选服务商结算；浏览器直连要求端点为 HTTPS 且允许跨域（CORS）。</p>
+
+        <div class="settings-section">
+          <label>
+            API Base URL
+            <input id="baseUrl" type="text" placeholder="https://api.example.com/v1" autocomplete="off" spellcheck="false" />
+          </label>
+          <div class="preset-row">
+            <select class="preset-select" aria-label="常用端点地址格式（仅填地址）">
+              <option value="">选择示例地址格式（仅填地址）</option>
+              <option value="https://api.example.com/v1">示例：…/v1</option>
+              <option value="https://api.example.com/v1/chat/completions">示例：…/chat/completions</option>
+            </select>
+            <span class="preset-note">仅填地址，本站不验证第三方服务；测试会产生一次极小的模型调用。</span>
+          </div>
+          <label>
+            API Key
+            <input id="apiKey" type="password" placeholder="sk-..." autocomplete="off" spellcheck="false" />
+          </label>
+          <label>
+            Model
+            <input id="model" type="text" placeholder="填写你的模型名称" autocomplete="off" spellcheck="false" />
+          </label>
+        </div>
+
+        <button type="button" class="btn-test">测试连接</button>
+        <div class="test-result" role="status" aria-live="polite" aria-atomic="true"></div>
+
+        <label class="check-row">
+          <input type="checkbox" />
+          <span class="check-text">本次不保存 Key</span>
+          <span class="check-note">选用后 Key 仅存内存，刷新即失效。</span>
+        </label>
+
+        <button type="button" class="link-danger">清除本机数据</button>
+        <p class="clear-note">仅清除本站保存在本机的数据；清除过程不联网。</p>
+      </div>
+      <div class="settings-dialog-actions">
+        <button type="button" class="btn-quiet" data-action="close-settings">完成</button>
+      </div>
+    </dialog>
 
     <dialog class="confirm-dialog" aria-label="清除本机数据">
       <h2 class="confirm-title">清除本机数据？<span class="confirm-tag">不可恢复</span></h2>

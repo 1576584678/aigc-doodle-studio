@@ -334,8 +334,7 @@ async function submit(): Promise<void> {
       {
         label: '去配置',
         onClick: () => {
-          dom.settings.open = true
-          dom.baseUrl.focus()
+          openSettings()
         }
       }
     ])
@@ -632,6 +631,36 @@ dom.leadJump.addEventListener('click', () => {
   dom.prompt.focus({ preventScroll: true })
 })
 
+// ---------- 模型设置弹框（替代原 <details> 内联展开，避免左栏过长） ----------
+function openSettings(): void {
+  // 与清除弹框一致：打开前先关导出面板，禁止两层浮层叠加
+  closeExportPanel(false)
+  dom.settingsDialog.showModal()
+  dom.baseUrl.focus({ preventScroll: true })
+}
+function closeSettings(): void {
+  if (dom.settingsDialog.open) dom.settingsDialog.close()
+}
+dom.settingsBtn.addEventListener('click', openSettings)
+dom.settingsClose.addEventListener('click', closeSettings)
+// 非破坏性弹框：点击遮罩区域关闭（原生 <dialog> 默认不会因 backdrop 关闭）
+dom.settingsDialog.addEventListener('click', (e: MouseEvent) => {
+  if (e.target === dom.settingsDialog) closeSettings()
+})
+// 关闭后焦点归还 opener；若清除事务已顺手关闭本弹框，回落到生成按钮
+dom.settingsDialog.addEventListener('close', () => {
+  const a = document.activeElement
+  if (a === document.body || a === null) dom.generate.focus({ preventScroll: true })
+  else dom.settingsBtn.focus({ preventScroll: true })
+})
+
+// ---------- 画布：返回示例墙 ----------
+dom.canvasBack.addEventListener('click', () => {
+  resetToSamples()
+  clearStatus()
+  dom.canvas.scrollIntoView({ block: 'center' })
+})
+
 // ---------- 操作条：下载 / 复制 / 存画廊 / 分享 / 打印 ----------
 dom.download.addEventListener('click', () => {
   const work = getWork()
@@ -789,7 +818,7 @@ initClear({
     dom.prompt.value = ''
     dom.dontSaveKey.checked = false
     dom.presetSelect.value = ''
-    dom.settings.open = false
+    closeSettings()
     dom.valueDetail.hidden = true
     dom.valueMore.setAttribute('aria-expanded', 'false')
     clearAllInvalid()

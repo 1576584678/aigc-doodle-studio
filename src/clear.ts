@@ -20,17 +20,15 @@ export interface ClearHost {
 
 let host: ClearHost | null = null
 
-/** 弹窗关闭（取消 / ESC / 确认）统一归还焦点：断开或隐藏时降级到 .settings-head。 */
+/** 弹窗关闭（取消 / ESC / 确认）统一归还焦点：设置弹框开启时回到「清除」入口，否则回到设置入口。 */
 function returnFocus(): void {
-  const target = dom.linkDanger
-  if (target.isConnected) {
-    target.focus({ preventScroll: true })
-    if (document.activeElement === target) return
+  const dialogOpen = dom.settingsDialog?.open ?? false
+  const prefer = dialogOpen ? dom.linkDanger : dom.settingsBtn
+  if (prefer?.isConnected) {
+    prefer.focus({ preventScroll: true })
+    if (document.activeElement === prefer) return
   }
-  dom.settingsHead.focus({ preventScroll: true })
-  if (document.activeElement === document.body || document.activeElement === null) {
-    dom.generate.focus({ preventScroll: true })
-  }
+  dom.generate.focus({ preventScroll: true })
 }
 
 /**
@@ -90,5 +88,5 @@ export function initClear(h: ClearHost): void {
 
 /** 供 main.ts 的全局 keydown 首行判断使用。 */
 export function isDialogOpen(): boolean {
-  return dom.dialog.open
+  return dom.dialog.open || (dom.settingsDialog?.open ?? false)
 }

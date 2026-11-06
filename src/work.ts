@@ -62,6 +62,7 @@ export function renderWork(meta: CurrentWork): void {
     badge.textContent = '示例作品 · 非模型生成'
     dom.canvas.appendChild(badge)
   }
+  dom.canvasBack.hidden = meta.source !== 'sample'
   refreshActions()
 }
 
@@ -141,5 +142,6 @@ function mountSamples(): void {
   dom.canvas.className = 'canvas empty'
   dom.canvas.innerHTML = ''
   dom.canvas.appendChild(createSampleWall(samplesCallback))
+  dom.canvasBack.hidden = true
   refreshActions()
 }
