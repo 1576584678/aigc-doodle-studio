@@ -39,6 +39,8 @@ export const dom = {
   settingsDialog: one<HTMLDialogElement>('.settings-dialog'),
   settingsClose: one<HTMLButtonElement>('[data-action="close-settings"]'),
   canvasBack: one<HTMLButtonElement>('.canvas-back'),
+  toolsToggle: one<HTMLButtonElement>('[data-action="toggle-tools"]'),
+  toolsMenu: one<HTMLElement>('.tools-menu'),
   valueMore: one<HTMLButtonElement>('.value-more'),
   valueDetail: one<HTMLElement>('.value-detail'),
   presetSelect: one<HTMLSelectElement>('.preset-select'),
@@ -48,7 +50,6 @@ export const dom = {
   linkDanger: one<HTMLButtonElement>('.link-danger'),
 
   exportTrigger: one<HTMLButtonElement>('[data-action="export-png"]'),
-  actWrap: one<HTMLElement>('.act-wrap'),
   exportPanel: one<HTMLElement>('.export-panel'),
   shareBtn: one<HTMLButtonElement>('[data-action="share"]'),
   printBtn: one<HTMLButtonElement>('[data-action="print"]'),

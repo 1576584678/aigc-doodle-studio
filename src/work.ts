@@ -111,7 +111,7 @@ export function refreshActions(): void {
   const has = current !== null
   const isSample = current?.source === 'sample'
   const full = countGallery() >= MAX_ITEMS
-  ;[dom.download, dom.copy, dom.exportTrigger, dom.shareBtn, dom.printBtn].forEach((b) => {
+  ;[dom.download, dom.copy, dom.exportTrigger, dom.shareBtn, dom.printBtn, dom.toolsToggle].forEach((b) => {
     b.disabled = !has
   })
   dom.save.disabled = !has || isSample || full

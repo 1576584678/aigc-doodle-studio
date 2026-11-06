@@ -661,6 +661,40 @@ dom.canvasBack.addEventListener('click', () => {
   dom.canvas.scrollIntoView({ block: 'center' })
 })
 
+// ---------- 画板右上角操作菜单（替代下方操作条，杜绝子面板遮挡） ----------
+function openTools(): void {
+  dom.toolsMenu.hidden = false
+  dom.toolsToggle.setAttribute('aria-expanded', 'true')
+}
+function closeTools(): void {
+  if (dom.toolsMenu.hidden) return
+  dom.toolsMenu.hidden = true
+  dom.toolsToggle.setAttribute('aria-expanded', 'false')
+}
+dom.toolsToggle.addEventListener('click', () => {
+  if (dom.toolsMenu.hidden) openTools()
+  else closeTools()
+})
+// click 冒泡阶段收起：保证按钮自身业务 click 先执行；导出项不收起（交给 export.ts 切换面板）
+document.addEventListener('click', (e: MouseEvent) => {
+  if (dom.toolsMenu.hidden) return
+  const t = e.target
+  if (!(t instanceof Element)) return
+  if (t.closest('.canvas-tools')) {
+    if (t.closest('[data-action="export-png"]') || t.closest('[data-action="toggle-tools"]')) return
+    closeTools()
+    return
+  }
+  closeTools()
+})
+// ESC 关闭菜单（设置/导出弹层优先，已在既有 keydown 处理）
+document.addEventListener('keydown', (e: KeyboardEvent) => {
+  if (e.key === 'Escape' && !dom.toolsMenu.hidden) {
+    closeTools()
+    dom.toolsToggle.focus({ preventScroll: true })
+  }
+})
+
 // ---------- 操作条：下载 / 复制 / 存画廊 / 分享 / 打印 ----------
 dom.download.addEventListener('click', () => {
   const work = getWork()

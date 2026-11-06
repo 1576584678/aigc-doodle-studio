@@ -312,18 +312,42 @@ if (!existsSync(samplesPath)) {
 }
 
 // ------------------------------------------- 6) 浏览器测试页关键内容存在性检查
-const pagePath = join(ROOT, 'tests', 'sanitize.test.html')
-if (!existsSync(pagePath)) {
+// 内联 <script type="module"> 在本机无头 Edge 的 --dump-dom 下不会执行（仅外部 src= 模块会执行），
+// 故两页的测试逻辑已抽到外部 .run.mjs；这里分别校验「HTML 引用 + 模块内含关键挂载点」。
+const sanitizeHtmlPath = join(ROOT, 'tests', 'sanitize.test.html')
+const sanitizeRunPath = join(ROOT, 'tests', 'sanitize.run.mjs')
+if (!existsSync(sanitizeHtmlPath)) {
   fail('缺少 tests/sanitize.test.html')
 } else {
   try {
-    const html = readText(pagePath)
-    const required = ['/src/sanitize.ts', './sanitize-vectors.mjs', '__SANITIZE_TEST_RESULT__', 'type="module"']
-    const missing = required.filter((s) => !html.includes(s))
+    const html = readText(sanitizeHtmlPath)
+    const run = existsSync(sanitizeRunPath) ? readText(sanitizeRunPath) : ''
+    const htmlReq = ['__SANITIZE_TEST_RESULT__', 'type="module"', 'sanitize.run.mjs']
+    const runReq = ['/src/sanitize.ts', './sanitize-vectors.mjs', '__SANITIZE_TEST_RESULT__']
+    const missingHtml = htmlReq.filter((s) => !html.includes(s))
+    const missingRun = runReq.filter((s) => !run.includes(s))
+    const missing = missingHtml.map((s) => 'html:' + s).concat(missingRun.map((s) => 'run:' + s))
     if (missing.length) fail('tests/sanitize.test.html 缺少关键内容：' + missing.join('、'))
     else note('tests/sanitize.test.html：import 路径与结构化结果挂载点齐全')
   } catch (e) {
     warn('tests/sanitize.test.html 读取失败：' + (e && e.message ? e.message : String(e)))
+  }
+}
+
+const interactionHtmlPath = join(ROOT, 'tests', 'interaction.test.html')
+const interactionRunPath = join(ROOT, 'tests', 'interaction.run.mjs')
+if (!existsSync(interactionHtmlPath)) {
+  fail('缺少 tests/interaction.test.html')
+} else {
+  try {
+    const html = readText(interactionHtmlPath)
+    const htmlReq = ['__INTERACTION_TEST_RESULT__', 'type="module"', 'interaction.run.mjs']
+    const missingHtml = htmlReq.filter((s) => !html.includes(s))
+    if (missingHtml.length) fail('tests/interaction.test.html 缺少关键内容：' + missingHtml.join('、'))
+    else if (!existsSync(interactionRunPath)) fail('缺少 tests/interaction.run.mjs（交互测试逻辑模块）')
+    else note('tests/interaction.test.html：结构化结果挂载点与逻辑模块引用齐全')
+  } catch (e) {
+    warn('tests/interaction.test.html 读取失败：' + (e && e.message ? e.message : String(e)))
   }
 }
 

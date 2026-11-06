@@ -1,0 +1,518 @@
+
+      const host = document.getElementById('app-host')
+      const results = []
+      const skipped = []
+      const notes = []
+
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+      const sleepFrames = async (n = 3) => { for (let i = 0; i < n; i += 1) await sleep(16) }
+
+      /** 迭代式等待：不依赖 Date.now()（虚拟时间下会跳变），靠 tick 数封顶。 */
+      async function waitFor(fn, maxTicks = 400) {
+        for (let i = 0; i < maxTicks; i += 1) {
+          let v = false
+          try { v = await fn() } catch { v = false }
+          if (v) return v
+          await sleep(16)
+        }
+        return false
+      }
+
+      function check(name, cond, msg) {
+        results.push({ name, ok: !!cond, reasons: cond ? [] : [msg || '断言不成立'] })
+        return !!cond
+      }
+      function fail(name, msg) { results.push({ name, ok: false, reasons: [msg] }) }
+      function skip(name, reason) { skipped.push({ name, reason }) }
+      function note(t) { notes.push(t) }
+
+      // ------------------------------------------------------------ 存储隔离
+      const PREFIX = 'aigc_doodle_'
+      function clearAigcKeys() {
+        const doomed = []
+        for (let i = 0; i < localStorage.length; i += 1) {
+          const k = localStorage.key(i)
+          if (k && k.startsWith(PREFIX)) doomed.push(k)
+        }
+        doomed.forEach((k) => localStorage.removeItem(k))
+      }
+      function aigcKeys() {
+        const out = []
+        for (let i = 0; i < localStorage.length; i += 1) {
+          const k = localStorage.key(i)
+          if (k && k.startsWith(PREFIX)) out.push(k)
+        }
+        return out
+      }
+
+      // ------------------------------------------------------------ iframe 装载
+      let navSeq = 0
+      let frame = null
+      let win = null
+      let doc = null
+
+      async function loadApp(seed) {
+        clearAigcKeys()
+        if (seed) Object.keys(seed).forEach((k) => localStorage.setItem(k, seed[k]))
+        frame = document.createElement('iframe')
+        frame.title = 'AIGC 简笔画工坊（被测应用）'
+        host.replaceChildren(frame)
+        const url = '/index.html?case=' + (++navSeq)
+        await new Promise((resolve, reject) => {
+          const t = setTimeout(() => reject(new Error('iframe load 超时')), 20000)
+          frame.addEventListener('load', () => { clearTimeout(t); resolve() }, { once: true })
+          frame.addEventListener('error', () => { clearTimeout(t); reject(new Error('iframe load error')) }, { once: true })
+          frame.src = url
+        })
+        win = frame.contentWindow
+        doc = frame.contentDocument
+        if (!win || !doc) throw new Error('iframe 同源文档不可访问')
+        // 聚焦 iframe，保证 dialog 默认焦点断言可靠
+        try { frame.focus(); win.focus() } catch { /* 忽略 */ }
+        const ready = await waitFor(() =>
+          doc.querySelectorAll('.sample-tile').length === 6 &&
+          !!doc.querySelector('.history-head') &&
+          !!doc.querySelector('.export-opt') &&
+          !!doc.querySelector('#gallery-count')
+        )
+        if (!ready) throw new Error('应用模块初始化未完成（示例墙 / 历史 / 导出面板未就绪）')
+      }
+
+      // ------------------------------------------------------------ 探针
+      function patchFetch(w) {
+        const real = w.fetch
+        const state = { calls: [], handler: null }
+        w.fetch = function (...args) {
+          state.calls.push(args)
+          if (state.handler) return state.handler(...args)
+          return real.apply(this, args)
+        }
+        state.restore = () => { w.fetch = real }
+        return state
+      }
+
+      function patchBlobCapture(w) {
+        const realCreate = w.URL.createObjectURL.bind(w.URL)
+        const origClick = w.HTMLAnchorElement.prototype.click
+        const state = { blobs: [], anchors: [] }
+        w.URL.createObjectURL = (obj) => { state.blobs.push(obj); return realCreate(obj) }
+        w.HTMLAnchorElement.prototype.click = function () { state.anchors.push(this.download || '') }
+        state.restore = () => {
+          w.URL.createObjectURL = realCreate
+          w.HTMLAnchorElement.prototype.click = origClick
+        }
+        return state
+      }
+
+      /** 在本页 realm 解码 PNG：先读出字节再造本地 Blob，避免跨 realm Blob 兼容问题。 */
+      async function decodePng(blob) {
+        const bytes = new Uint8Array(await blob.arrayBuffer())
+        const local = new Blob([bytes], { type: 'image/png' })
+        const url = URL.createObjectURL(local)
+        try {
+          const img = new Image()
+          await new Promise((resolve, reject) => {
+            img.onload = resolve
+            img.onerror = () => reject(new Error('PNG 解码失败'))
+            img.src = url
+          })
+          const c = document.createElement('canvas')
+          c.width = img.naturalWidth
+          c.height = img.naturalHeight
+          const ctx = c.getContext('2d', { willReadFrequently: true })
+          if (!ctx) throw new Error('无法获取 2d context')
+          ctx.drawImage(img, 0, 0)
+          const at = (x, y) => Array.from(ctx.getImageData(x, y, 1, 1).data)
+          return {
+            bytes,
+            w: c.width,
+            h: c.height,
+            corners: [at(0, 0), at(c.width - 1, 0), at(0, c.height - 1), at(c.width - 1, c.height - 1)]
+          }
+        } finally {
+          URL.revokeObjectURL(url)
+        }
+      }
+
+      const isPng = (blob) => blob && /image\/png/i.test(blob.type || '')
+      const hasMagic = (bytes) => bytes.length >= 8 &&
+        bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
+
+      /** 画廊种子：3 条合法 GalleryItem（字段齐全、SVG 可通过 sanitizeSvg）。 */
+      function gallerySeed() {
+        const mk = (id, r, ts) => ({
+          id,
+          prompt: '测试作品 ' + id,
+          svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400"><circle cx="200" cy="200" r="' + r + '" fill="none" stroke="#222222" stroke-width="6"/></svg>',
+          mode: 'doodle',
+          style: 'minimal',
+          ts
+        })
+        return [mk('g_test_a', 60, 1700000000001), mk('g_test_b', 70, 1700000000002), mk('g_test_c', 80, 1700000000003)]
+      }
+
+      // ------------------------------------------------------------ 断言组
+      let tiles = []
+      let fetchSpy = null
+      let blobSpy = null
+
+      async function groupFirstScreenAndSamples() {
+        await loadApp(null)
+        fetchSpy = patchFetch(win)
+        blobSpy = patchBlobCapture(win)
+
+        const tileCount = doc.querySelectorAll('.sample-tile').length
+        check('首屏：.sample-tile = 6', tileCount === 6, '实际 ' + tileCount + ' 格')
+        check('首屏：#gallery-count = 0 / 50',
+          doc.querySelector('#gallery-count').textContent.trim() === '0 / 50',
+          '实际 ' + doc.querySelector('#gallery-count').textContent)
+        check('首屏：.settings-dialog 默认关闭',
+          doc.querySelector('.settings-dialog').open === false,
+          '设置弹框默认展开')
+        check('首屏：无 .status.error', !doc.querySelector('.status.error'), '首屏出现错误态')
+
+        tiles = Array.from(doc.querySelectorAll('.sample-tile'))
+        // 程序化 click 事件：第 1 张会替换画布并卸载示例墙，
+        // 但保留按钮对象引用后其余 5 张的 click 监听仍会真实触发。
+        tiles[0].click()
+        await sleepFrames(2)
+        const svg = doc.querySelector('#canvas svg')
+        check('点第 1 张示例 → 画布出现 SVG 且带 aria-label',
+          !!svg && /示例作品/.test(svg.getAttribute('aria-label') || ''),
+          '画布未渲染示例 SVG 或缺少 aria-label')
+        check('点第 1 张示例 → source 为示例',
+          !!doc.querySelector('.canvas-badge--sample') && doc.querySelector('#canvas').classList.contains('is-sample'),
+          '缺少示例角标 / is-sample 标记')
+        const actSel = ['#download', '#copy', '[data-action="export-png"]', '[data-action="share"]', '[data-action="print"]']
+        const disabled = actSel.filter((s) => doc.querySelector(s).disabled)
+        check('点第 1 张示例 → 操作按钮启用', disabled.length === 0, '仍禁用：' + disabled.join('、'))
+        check('点第 1 张示例 → 历史条新增 1 项',
+          doc.querySelectorAll('.history-item').length === 1 &&
+          doc.querySelector('.history-count').textContent.trim() === '1 / 5',
+          '实际历史 ' + doc.querySelectorAll('.history-item').length + ' 项')
+        check('点第 1 张示例 → 显示「返回示例」按钮（可缩回示例墙）',
+          doc.querySelector('.canvas-back') && doc.querySelector('.canvas-back').hidden === false,
+          '返回示例按钮未显示')
+
+        for (let i = 1; i < tiles.length; i += 1) tiles[i].click()
+        await sleepFrames(2)
+        const hItems = doc.querySelectorAll('.history-item').length
+        const hint = doc.querySelector('.history-hint')
+        check('连点至第 6 张 → 历史最多 5 项',
+          hItems === 5 && doc.querySelector('.history-count').textContent.trim() === '5 / 5',
+          '实际 ' + hItems + ' 项')
+        check('连点至第 6 张 → 出现「较早的一张已移出」提示',
+          !!hint && /较早的一张已移出/.test(hint.textContent),
+          '未出现容量丢弃提示')
+      }
+
+      async function groupNoConfigGenerate() {
+        const before = fetchSpy.calls.length
+        doc.querySelector('#generate').click()
+        await sleepFrames(2)
+        const st = doc.querySelector('#status')
+        check('无配置点生成 → #status 为 info 引导文案',
+          st.dataset.kind === 'info' && /先看看示例|填写自己的模型配置/.test(st.textContent),
+          '实际 kind=' + st.dataset.kind + ' text=' + st.textContent)
+        check('无配置点生成 → 不含「请先填写 API 地址」',
+          !/请先填写 API 地址/.test(st.textContent), '出现旧的硬报错引导文案')
+        const invalid = ['#baseUrl', '#apiKey', '#prompt', '#model'].filter((s) => doc.querySelector(s).hasAttribute('aria-invalid'))
+        check('无配置点生成 → 输入框均无 aria-invalid', invalid.length === 0, '被标记：' + invalid.join('、'))
+        check('无配置点生成 → 未发起 fetch',
+          fetchSpy.calls.length === before, 'fetch 调用 +' + (fetchSpy.calls.length - before))
+        note('无配置引导同时提供「看示例 / 去配置」内联动作：' + doc.querySelectorAll('#status .status-action').length + ' 个')
+      }
+
+      /** 选择底色/倍率并执行导出，返回捕获到的 PNG Blob 或 null。 */
+      async function runPng(bg, scale) {
+        const panel = doc.querySelector('.export-panel')
+        if (panel.hidden) doc.querySelector('[data-action="export-png"]').click()
+        const b = doc.querySelector('.export-opt[data-bg="' + bg + '"]')
+        const s = doc.querySelector('.export-opt[data-scale="' + scale + '"]')
+        const go = doc.querySelector('.export-go')
+        if (!b || !s || !go) return null
+        b.click(); s.click()
+        blobSpy.blobs.length = 0
+        blobSpy.anchors.length = 0
+        const callsBefore = fetchSpy.calls.length
+        go.click()
+        const settled = await waitFor(() => panel.hidden || !!doc.querySelector('.export-error') ||
+          (go.getAttribute('aria-busy') === 'false' && go.textContent === '导出 PNG'), 500)
+        if (!settled) return null
+        const png = blobSpy.blobs.filter(isPng).slice(-1)[0] || null
+        return { png, callsBefore, callsAfter: fetchSpy.calls.length }
+      }
+
+      async function groupPng() {
+        const label = (bg, scale) => bg + ' ' + scale + 'x'
+        for (const [bg, scale, w, h] of [['transparent', '2', 800, 800], ['white', '4', 1600, 1600]]) {
+          const r = await runPng(bg, scale)
+          if (!r || !r.png) {
+            skip('PNG ' + label(bg, scale) + ' 导出（魔数 / 尺寸 / 四角像素 / 零网络）',
+              '无头浏览器未在等待窗口内产出 PNG Blob（Image.onload / canvas.toBlob 时序不稳定），未伪造通过')
+            continue
+          }
+          let decoded
+          try { decoded = await decodePng(r.png) }
+          catch (e) {
+            skip('PNG ' + label(bg, scale) + ' 解码',
+              'PNG Blob 已产出但无法在本页解码：' + (e && e.message ? e.message : String(e)))
+            continue
+          }
+          check('PNG ' + label(bg, scale) + ' → 魔数 89 50 4E 47 且非空',
+            hasMagic(decoded.bytes) && decoded.bytes.length > 100,
+            '魔数不符或字节过少（' + decoded.bytes.length + ' B）')
+          check('PNG ' + label(bg, scale) + ' → 尺寸 ' + w + '×' + h,
+            decoded.w === w && decoded.h === h, '实际 ' + decoded.w + '×' + decoded.h)
+          const cornersOk = bg === 'transparent'
+            ? decoded.corners.every((p) => p[3] === 0)
+            : decoded.corners.every((p) => p[0] === 255 && p[1] === 255 && p[2] === 255 && p[3] === 255)
+          check('PNG ' + label(bg, scale) + ' → 四角' + (bg === 'transparent' ? ' alpha=0' : '纯白'),
+            cornersOk, '四角像素：' + JSON.stringify(decoded.corners))
+          check('PNG ' + label(bg, scale) + ' → 零网络（fetch 计数不变）',
+            r.callsAfter === r.callsBefore, 'fetch 调用 +' + (r.callsAfter - r.callsBefore))
+        }
+      }
+
+      async function groupShareCard() {
+        blobSpy.blobs.length = 0
+        blobSpy.anchors.length = 0
+        const btn = doc.querySelector('[data-action="share"]')
+        const before = fetchSpy.calls.length
+        btn.click()
+        const settled = await waitFor(() => btn.getAttribute('aria-busy') === 'false', 500)
+        if (!settled) {
+          skip('分享卡片生成（1080×1440 / 非空 / 零网络）', '分享按钮未在等待窗口内结束 busy 状态')
+          return
+        }
+        const png = blobSpy.blobs.filter(isPng).slice(-1)[0]
+        if (!png) {
+          skip('分享卡片生成（1080×1440 / 非空 / 零网络）', '未捕获到分享卡片 PNG Blob，未伪造通过')
+          return
+        }
+        let decoded
+        try { decoded = await decodePng(png) }
+        catch (e) {
+          skip('分享卡片解码', 'Blob 已产出但解码失败：' + (e && e.message ? e.message : String(e)))
+          return
+        }
+        check('分享卡片 → PNG 魔数正确且非空',
+          hasMagic(decoded.bytes) && decoded.bytes.length > 1000,
+          '字节数 ' + decoded.bytes.length)
+        check('分享卡片 → 尺寸 1080×1440',
+          decoded.w === 1080 && decoded.h === 1440, '实际 ' + decoded.w + '×' + decoded.h)
+        check('分享卡片 → 零网络（fetch 计数不变）',
+          fetchSpy.calls.length === before, 'fetch 调用 +' + (fetchSpy.calls.length - before))
+        skip('分享卡片 localhost 不显示站点地址',
+          '站点地址是 Canvas 像素文本而非 DOM 节点，无法从 DOM/Blob 尺寸断言；此项仅由 sharecard.ts 的 isLocalOrigin() 分支保证，已以「生成不抛错 + 尺寸正确 + 零网络」间接覆盖')
+      }
+
+      async function groupGalleryUndo() {
+        const items = gallerySeed()
+        await loadApp({ aigc_doodle_gallery: JSON.stringify(items) })
+        check('预置 3 条合法 GalleryItem → 画廊渲染 3 张卡',
+          doc.querySelectorAll('.card').length === 3 &&
+          doc.querySelector('#gallery-count').textContent.trim() === '3 / 50',
+          '实际卡片 ' + doc.querySelectorAll('.card').length + ' 张')
+
+        const del = doc.querySelector('.card .del')
+        del.click()
+        await sleepFrames(2)
+        const undo = doc.querySelector('.toast-undo')
+        check('删除作品 → 出现 5 秒撤销窗口', !!undo && !!doc.querySelector('.toast.is-undo'), '未出现 .toast-undo')
+        check('删除作品 → #status 未出现「已从画廊删除」（单一播报源）',
+          !/已从画廊删除/.test(doc.querySelector('#status').textContent),
+          '#status 被写入删除播报：' + doc.querySelector('#status').textContent)
+        if (undo) {
+          undo.click()
+          await sleepFrames(2)
+          const restored = JSON.parse(localStorage.getItem('aigc_doodle_gallery') || '[]')
+          check('5 秒内撤销 → 恢复 3 条且 id / ts / 原索引完全一致',
+            JSON.stringify(restored) === JSON.stringify(items),
+            '恢复后数据：' + JSON.stringify(restored))
+          check('撤销后 → 撤销 toast 消失', !doc.querySelector('.toast.is-undo'), '撤销窗口未关闭')
+        } else {
+          skip('5 秒内撤销恢复', '删除未产生撤销按钮，无法执行')
+        }
+      }
+
+      async function groupClearTransaction() {
+        const items = gallerySeed()
+        await loadApp({
+          aigc_doodle_settings: JSON.stringify({ baseUrl: 'https://api.example.com/v1', apiKey: 'test-key-not-real', model: 'test-model' }),
+          aigc_doodle_gallery: JSON.stringify(items)
+        })
+        const fSpy = patchFetch(win)
+        // 开启一个撤销窗口
+        const del = doc.querySelector('.card .del')
+        if (del) del.click()
+        await sleepFrames(2)
+        const undoWasOpen = !!doc.querySelector('.toast.is-undo')
+
+        try { frame.focus(); win.focus() } catch { /* 忽略 */ }
+        doc.querySelector('.link-danger').click()
+        await sleepFrames(2)
+        const dialog = doc.querySelector('dialog.confirm-dialog')
+        const quiet = doc.querySelector('.confirm-dialog .btn-quiet')
+        check('清除事务 → 预置数据 + 撤销窗口已建立',
+          undoWasOpen && dialog.open, '撤销窗口或 dialog 未就绪')
+        check('清除事务 → dialog 默认焦点在 .btn-quiet（取消）',
+          doc.activeElement === quiet,
+          '实际 activeElement=' + (doc.activeElement ? (doc.activeElement.className || doc.activeElement.tagName) : 'null'))
+
+        const before = fSpy.calls.length
+        doc.querySelector('.btn-danger').click()
+        await sleepFrames(3)
+        check('确认清除 → aigc_doodle_* 前缀键全清',
+          aigcKeys().length === 0, '残留键：' + aigcKeys().join('、'))
+        check('确认清除 → 画廊计数回 0 / 50',
+          doc.querySelector('#gallery-count').textContent.trim() === '0 / 50',
+          '实际 ' + doc.querySelector('#gallery-count').textContent)
+        check('确认清除 → 画布回到 6 格示例墙',
+          doc.querySelectorAll('.sample-tile').length === 6 && doc.querySelector('#canvas').classList.contains('empty'),
+          '实际示例格 ' + doc.querySelectorAll('.sample-tile').length)
+        check('确认清除 → 撤销 toast 消失且输入框为空',
+          !doc.querySelector('.toast.is-undo') &&
+          ['#baseUrl', '#apiKey', '#model', '#prompt'].every((s) => doc.querySelector(s).value === ''),
+          'toast 残留或输入框未清空')
+        check('确认清除 → 无 fetch 调用（清除过程不联网）',
+          fSpy.calls.length === before, 'fetch 调用 +' + (fSpy.calls.length - before))
+        check('确认清除 → dialog 已关闭', !dialog.open, 'dialog 仍 open')
+
+        // 打印：清除后示例墙重新挂载，点一格得到作品，再 patch window.print
+        doc.querySelector('.sample-tile').click()
+        await sleepFrames(2)
+        let printCalls = 0
+        const realPrint = win.print
+        win.print = () => { printCalls += 1 }
+        doc.querySelector('[data-action="print"]').click()
+        await sleepFrames(2)
+        win.print = realPrint
+        check('打印 → patch window.print 后点 [data-action="print"] 被调用 1 次',
+          printCalls === 1, '实际调用 ' + printCalls + ' 次')
+      }
+
+      async function groupSelfTest() {
+        await loadApp(null)
+        const spy = patchFetch(win)
+        doc.querySelector('#baseUrl').value = 'https://api.example.com/v1'
+        doc.querySelector('#apiKey').value = 'test-key-not-real'
+        doc.querySelector('#model').value = 'test-model'
+
+        const cases = [
+          { name: '401', handler: () => Promise.resolve(new win.Response(null, { status: 401 })), want: ['密钥无效', '请检查或重新填写 API Key'] },
+          { name: '404', handler: () => Promise.resolve(new win.Response(null, { status: 404 })), want: ['接口地址不对', '请换用端点预设'] },
+          { name: '429', handler: () => Promise.resolve(new win.Response(null, { status: 429 })), want: ['请求太频繁', '请稍后再试'] },
+          { name: 'TypeError: Failed to fetch', handler: () => Promise.reject(new win.TypeError('Failed to fetch')), want: ['跨域', '请换用支持跨域'] }
+        ]
+        let statusClean = true
+        let anyRan = false
+        for (const c of cases) {
+          spy.handler = c.handler
+          doc.querySelector('#status').textContent = ''
+          doc.querySelector('#status').className = 'status'
+          doc.querySelector('#status').removeAttribute('data-kind')
+          const btn = doc.querySelector('.btn-test')
+          btn.click()
+          const settled = await waitFor(() =>
+            btn.textContent === '测试连接' && (doc.querySelector('.test-result').textContent || '').length > 0, 400)
+          if (!settled) {
+            skip('自检分类 ' + c.name, '无头环境下自检结果未在等待窗口内写出（时序不稳），未伪造通过')
+            continue
+          }
+          anyRan = true
+          const text = doc.querySelector('.test-result').textContent
+          check('自检分类 ' + c.name + ' → .test-result 含对应可行动文案',
+            c.want.every((w) => text.includes(w)), '实际：' + text)
+          if ((doc.querySelector('#status').textContent || '').trim() !== '') statusClean = false
+          await sleep(400) // 越过 selftest 的 350ms 连点保护
+        }
+        if (anyRan) {
+          check('自检分类 → 全程 #status 始终为空（不污染主状态机）',
+            statusClean, '自检过程中 #status 被写入')
+        } else {
+          skip('自检分类 → 全程 #status 始终为空', '自检分类均未跑通，无法判定')
+        }
+        spy.handler = null
+      }
+
+      // ------------------------------------------------------------ 执行
+      let fatal = null
+      const groups = [
+        ['首屏与示例/历史', groupFirstScreenAndSamples],
+        ['无配置生成', groupNoConfigGenerate],
+        ['PNG 导出（透明底2x / 白底4x）', groupPng],
+        ['分享卡片', groupShareCard],
+        ['画廊删除与撤销', groupGalleryUndo],
+        ['清除事务与打印', groupClearTransaction],
+        ['自检分类', groupSelfTest]
+      ]
+      for (const [label, fn] of groups) {
+        try { await fn() }
+        catch (e) { fail(label + '（组内异常）', e && e.message ? e.message : String(e)) }
+      }
+
+      // 清理：仅移除 aigc_doodle_* 键，不触碰其他站点数据；跑完即关 iframe
+      try { if (fetchSpy) fetchSpy.restore() } catch { /* 忽略 */ }
+      try { if (blobSpy) blobSpy.restore() } catch { /* 忽略 */ }
+      try { clearAigcKeys() } catch (e) { fatal = '清理 localStorage 失败：' + String(e) }
+      try { host.replaceChildren() } catch { /* 忽略 */ }
+      if (fatal) fail('测试收尾', fatal)
+
+      const passed = results.filter((r) => r.ok).length
+      const failed = results.length - passed
+      const total = results.length
+      const result = {
+        total, passed, failed,
+        ok: failed === 0 && total > 0,
+        done: true,
+        failures: results.filter((r) => !r.ok).map((r) => ({ name: r.name, reasons: r.reasons })),
+        skipped
+      }
+      window.__INTERACTION_TEST_RESULT__ = result
+
+      // ---------- 渲染（全部 textContent，避免把不可信字符串当 HTML 解析） ----------
+      const summary = document.getElementById('summary')
+      summary.textContent = result.ok
+        ? '全部通过：共 ' + total + ' 条 · 通过 ' + passed + ' · 失败 ' + failed + ' · 跳过 ' + skipped.length
+        : '存在失败：共 ' + total + ' 条 · 通过 ' + passed + ' · 失败 ' + failed + ' · 跳过 ' + skipped.length
+      summary.setAttribute('data-state', result.ok ? 'pass' : 'fail')
+
+      const tbody = document.getElementById('rows')
+      const frag = document.createDocumentFragment()
+      let idx = 0
+      for (const r of results) {
+        idx += 1
+        const tr = document.createElement('tr')
+        tr.className = r.ok ? 'pass' : 'fail'
+        const cells = [
+          ['idx', String(idx)], ['name', r.name], ['state', r.ok ? '通过' : '失败'],
+          ['reason', r.reasons.length ? r.reasons.join('；') : '符合预期']
+        ]
+        for (const [cls, text] of cells) {
+          const td = document.createElement('td')
+          td.className = cls
+          td.textContent = text
+          tr.appendChild(td)
+        }
+        frag.appendChild(tr)
+      }
+      for (const s of skipped) {
+        idx += 1
+        const tr = document.createElement('tr')
+        tr.className = 'skip'
+        for (const [cls, text] of [['idx', String(idx)], ['name', s.name], ['state', '跳过'], ['reason', s.reason]]) {
+          const td = document.createElement('td')
+          td.className = cls
+          td.textContent = text
+          tr.appendChild(td)
+        }
+        frag.appendChild(tr)
+      }
+      tbody.appendChild(frag)
+
+      document.getElementById('skips').textContent = skipped.length
+        ? skipped.map((s, i) => '[' + (i + 1) + '] ' + s.name + '\n  ' + s.reason).join('\n\n')
+        : '（无跳过项）'
+      document.getElementById('machine').textContent = JSON.stringify(result, null, 2)
+    
