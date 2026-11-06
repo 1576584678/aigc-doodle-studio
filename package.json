@@ -1,0 +1,16 @@
+{
+  "name": "aigc-doodle-studio",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "AIGC 简笔画 / 火柴人 SVG 生成小平台 MVP",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0"
+  }
+}

@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AIGC 简笔画工坊</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>✏️ AIGC 简笔画工坊</h1>
+      <p class="subtitle">描述一句话，生成 SVG 简笔画 / 火柴人</p>
+    </header>
+
+    <main class="layout">
+      <!-- 左侧：输入 + 设置 -->
+      <section class="panel left">
+        <details class="settings" open>
+          <summary>⚙️ 模型设置</summary>
+          <label>
+            API Base URL
+            <input id="baseUrl" type="text" placeholder="http://aibox.richaibox.com:2026/v1" />
+          </label>
+          <label>
+            API Key
+            <input id="apiKey" type="password" placeholder="sk-..." />
+          </label>
+          <label>
+            Model
+            <input id="model" type="text" placeholder="glm-5.2" />
+          </label>
+          <p class="key-warning">设置保存在本机浏览器，不会上传；但 API Key 以明文存放，公用电脑请勿保存</p>
+        </details>
+
+        <label class="mode-label">生成模式</label>
+        <div class="mode-toggle" role="group" aria-label="生成模式">
+          <button id="mode-doodle" class="mode-btn active" data-mode="doodle" aria-pressed="true" type="button">🎨 简笔画</button>
+          <button id="mode-stickman" class="mode-btn" data-mode="stickman" aria-pressed="false" type="button">🤸 火柴人</button>
+        </div>
+
+        <label class="prompt-label" for="prompt">描述你要画的内容</label>
+        <div class="examples" role="group" aria-labelledby="examples-label">
+          <span id="examples-label" class="examples-label">试试这些</span>
+          <button type="button" class="chip" data-prompt="一只戴帽子的猫" data-mode="doodle" aria-label="填入示例：一只戴帽子的猫，简笔画模式">一只戴帽子的猫</button>
+          <button type="button" class="chip" data-prompt="一杯冒热气的热咖啡" data-mode="doodle" aria-label="填入示例：一杯冒热气的热咖啡，简笔画模式">一杯冒热气的热咖啡</button>
+          <button type="button" class="chip" data-prompt="云朵下的一把小雨伞" data-mode="doodle" aria-label="填入示例：云朵下的一把小雨伞，简笔画模式">云朵下的一把小雨伞</button>
+          <button type="button" class="chip" data-prompt="一个正在跑步的火柴人" data-mode="stickman" aria-label="填入示例：一个正在跑步的火柴人，火柴人模式">一个正在跑步的火柴人</button>
+          <button type="button" class="chip" data-prompt="一个挥手打招呼的火柴人" data-mode="stickman" aria-label="填入示例：一个挥手打招呼的火柴人，火柴人模式">一个挥手打招呼的火柴人</button>
+          <button type="button" class="chip" data-prompt="一个举着气球的火柴人" data-mode="stickman" aria-label="填入示例：一个举着气球的火柴人，火柴人模式">一个举着气球的火柴人</button>
+        </div>
+        <textarea
+          id="prompt"
+          rows="3"
+          maxlength="300"
+          aria-describedby="shortcut-hint"
+          aria-keyshortcuts="Control+Enter Meta+Enter"
+          placeholder="例如：一只戴帽子的猫 / 一个正在跑步的小人"
+        ></textarea>
+        <p class="shortcut-hint" id="shortcut-hint">按 Ctrl / ⌘ + Enter 快速生成 <span id="prompt-count" class="prompt-count" aria-live="off">0 / 300</span></p>
+
+        <button id="generate" class="primary" type="button">生成</button>
+        <div id="status" class="status" role="status" aria-live="polite" aria-atomic="true"></div>
+      </section>
+
+      <!-- 右侧：展示 + 画廊 -->
+      <section class="panel right">
+        <div class="stage">
+          <div id="canvas" class="canvas empty">
+            <span class="placeholder">生成的图会显示在这里</span>
+          </div>
+          <div class="stage-actions">
+            <button id="download" type="button" disabled>下载 SVG</button>
+            <button id="copy" type="button" disabled>复制代码</button>
+            <button id="save" type="button" disabled>存入画廊</button>
+          </div>
+        </div>
+
+        <h2 class="gallery-title">🖼️ 画廊 <span id="gallery-count" aria-live="polite">0 / 50</span></h2>
+        <div id="gallery" class="gallery" role="list" aria-label="画廊作品" tabindex="-1"></div>
+      </section>
+    </main>
+
+    <div class="toast-region" id="toast-region" aria-live="polite"></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
