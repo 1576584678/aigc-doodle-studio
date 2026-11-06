@@ -120,6 +120,8 @@ function render(): void {
       btn.setAttribute('aria-label', `查看第 ${i + 1} 张历史：${it.prompt}（${modeText}）`)
       btn.title = it.prompt
       btn.dataset.prompt = it.prompt
+      // 把该项生成时的画风写到 DOM，供风格一致性断言只读观测；不改变任何行为
+      btn.dataset.style = it.style
       const safe = thumbnailSvg(it.svg)
       if (safe) {
         const art = document.createElement('span')

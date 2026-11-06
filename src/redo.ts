@@ -96,5 +96,9 @@ export function initRedo(): void {
 /** 仅用 hidden 属性控制显隐，不写 display:none 硬编码。 */
 export function setRedoVisible(visible: boolean): void {
   if (!bar) return
+  // 每次重画条出现时都按当前真实档位重算标签：清除事务走 resetStyle() 把档位
+  // 复位成 minimal，并不触发 .style-btn 的 click，仅靠 init / swap / click 同步
+  // 会让 aria-label 停留在清除前那一档，读屏提示与实际点击结果不一致。
+  if (visible) syncStyleLabel()
   bar.hidden = !visible
 }

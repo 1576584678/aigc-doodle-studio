@@ -151,26 +151,6 @@
         return [mk('g_test_a', 60, 1700000000001), mk('g_test_b', 70, 1700000000002), mk('g_test_c', 80, 1700000000003)]
       }
 
-      /**
-       * 在 iframe realm 内从 /src/styles.ts 与 /src/history.ts 动态 import，
-       * 取到与被测应用 main.ts 同一份 ES 模块实例（同一 document / 同一 module map）。
-       * 这样 getActiveStyle() / currentHistoryItem() 读到的才是应用真实状态，
-       * 而不是测试页 realm 里那份彼此独立的模块副本。
-       */
-      async function appModules() {
-        const code = 'Promise.all([import("/src/styles.ts"), import("/src/history.ts")])'
-        let pair = null
-        try { pair = await win.eval(code) } catch { /* 换等价的间接 eval 再试 */ }
-        if (!pair || !pair[0] || typeof pair[0].getActiveStyle !== 'function') {
-          pair = await win.Function('return ' + code)()
-        }
-        if (!pair || !pair[0] || typeof pair[0].getActiveStyle !== 'function' ||
-            !pair[1] || typeof pair[1].currentHistoryItem !== 'function') {
-          throw new Error('无法在 iframe realm 内导入 /src/styles.ts 与 /src/history.ts')
-        }
-        return { styles: pair[0], history: pair[1] }
-      }
-
       // ------------------------------------------------------------ 断言组
       let tiles = []
       let fetchSpy = null
@@ -459,7 +439,7 @@
       /**
        * 新增组（不改既有 7 组）：
        *   ① 清除操作后 .style-btn[data-style="minimal"] 复位（FR-13 / C-20）
-       *   ② 「换个风格重画」后 getActiveStyle()（从 /src/styles.ts 导入）与历史项记录的 style 一致
+       *   ② 「换个风格重画」后当前档位与历史项记录的 style 一致（纯 DOM 可观测）
        */
       async function groupRedoAndStyle() {
         await loadApp({
@@ -511,11 +491,12 @@
           return !!b && !b.hidden && doc.querySelectorAll('.history-item').length === 1
         }, 500)
 
-        let mods = null
-        let modErr = ''
-        try { mods = await appModules() }
-        catch (e) { modErr = e && e.message ? e.message : String(e) }
-        const before = mods ? mods.styles.getActiveStyle() : '(无法读取)'
+        // 纯 DOM 可观测读取，不跨 realm 导入任何应用模块
+        const activeStyleKey = () => {
+          const b = doc.querySelector('.style-btn.is-active')
+          return b ? String(b.dataset.style || '') : ''
+        }
+        const before = activeStyleKey()
         const swapBtn = doc.querySelector('.redo-bar .redo-style') ||
           Array.from(doc.querySelectorAll('.redo-bar button'))
             .find((b) => /换个风格重画/.test(b.textContent || ''))
@@ -525,18 +506,27 @@
           swapBtn.click()
           settled = await waitFor(() => doc.querySelectorAll('.history-item').length === 2, 500)
         }
-        const active = mods ? mods.styles.getActiveStyle() : '(无法读取)'
-        const item = mods ? mods.history.currentHistoryItem() : null
-        const activeBtn = doc.querySelector('.style-btn[data-style="' + active + '"]')
-        check('换个风格重画 → getActiveStyle()（src/styles.ts）与历史项记录的 style 一致且已切档',
-          !!mods && genReady && settled && !!item &&
-          active === item.style && active !== before &&
-          !!activeBtn && activeBtn.classList.contains('is-active') &&
-          /^换成.+风格重画$/.test(swapLabel),
-          '模块导入=' + (mods ? 'ok' : modErr) + ' / 首次生成=' + genReady +
-          ' / 二次生成=' + settled + ' / getActiveStyle()=' + active +
-          ' / 历史项 style=' + (item ? item.style : '无') +
-          ' / 切换前=' + before + ' / aria-label=' + swapLabel)
+        const after = activeStyleKey()
+        const currentItem = doc.querySelector('.history-item.is-current')
+        const historyStyle = currentItem ? String(currentItem.dataset.style || '') : ''
+        const activeBtn = after ? doc.querySelector('.style-btn[data-style="' + after + '"]') : null
+        // 目标档标签须与「当前档的下一档」一致：清除复位为 minimal → 圆润可爱。
+        // 这一条同时锁住 setRedoVisible(true) 重算标签的修复（陈旧标签会在此暴露）。
+        const expectedLabel = {
+          minimal: '换成圆润可爱风格重画',
+          cute: '换成涂色线稿风格重画',
+          coloring: '换成极简线稿风格重画'
+        }[before]
+        check('换个风格重画 → 当前档位与历史项记录的 style 一致且已切档',
+          genReady && settled &&
+          after !== before && after === historyStyle &&
+          !!activeBtn && activeBtn.getAttribute('aria-pressed') === 'true' &&
+          /^换成.+风格重画$/.test(swapLabel) && swapLabel === expectedLabel,
+          '首次生成=' + genReady + ' / 二次生成=' + settled +
+          ' / before=' + before + ' / after=' + after +
+          ' / historyStyle=' + historyStyle + ' / aria-label=' + swapLabel +
+          ' / expectedLabel=' + expectedLabel +
+          ' / aria-pressed=' + (activeBtn ? activeBtn.getAttribute('aria-pressed') : '无'))
       }
 
       // ------------------------------------------------------------ 执行
