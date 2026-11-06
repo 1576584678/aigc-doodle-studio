@@ -1,0 +1,32 @@
+name: 功能建议
+description: 提出新能力或体验改进
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 想解决的问题
+      description: 先描述场景与痛点，再描述你设想的方案
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议的做法
+      placeholder: 例如：希望导出透明底 PNG，以便直接贴进公众号配图
+    validations:
+      required: true
+  - type: dropdown
+    id: scope
+    attributes:
+      label: 是否需要服务端
+      description: 本项目定位为纯前端零后端，涉及服务端的建议通常不会纳入
+      options:
+        - 不需要，纯前端可实现
+        - 不确定
+        - 需要
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 考虑过的替代方案（可选）

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400" role="img" aria-label="一只戴帽子的猫，简笔画示例">
+  <g fill="none" stroke="#222" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M148 128 L200 66 L252 128 Z" fill="#cfe3ff"/>
+    <path d="M132 130 Q200 116 268 130"/>
+    <path d="M146 168 L142 118 L184 150"/>
+    <path d="M254 168 L258 118 L216 150"/>
+    <circle cx="200" cy="210" r="68"/>
+    <circle cx="176" cy="202" r="5" fill="#222" stroke="none"/>
+    <circle cx="224" cy="202" r="5" fill="#222" stroke="none"/>
+    <path d="M194 226 L206 226 L200 234 Z" fill="#222" stroke="none"/>
+    <path d="M200 234 Q190 246 180 236"/>
+    <path d="M200 234 Q210 246 220 236"/>
+    <path d="M150 226 L120 218 M150 238 L122 240 M250 226 L280 218 M250 238 L278 240"/>
+    <path d="M158 272 Q132 312 138 352"/>
+    <path d="M242 272 Q268 312 262 352"/>
+    <path d="M138 352 Q200 336 262 352"/>
+    <path d="M262 340 Q310 336 306 292"/>
+  </g>
+</svg>

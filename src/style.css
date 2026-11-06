@@ -288,3 +288,9 @@ textarea { resize: vertical; margin-top: 8px; width: 100%; }
 
 /* 焦点环必须放文件末尾，覆盖 input/textarea 的 outline:none */
 :is(a,button,input,textarea,summary,[tabindex]):focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+
+/* 页脚：费用/隐私说明与源码入口（非弹窗、不阻断、不诱导） */
+.footer{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px 16px;padding:0 28px 28px;font-size:12px;line-height:1.6;color:var(--info-text,#5f6672);text-align:center}
+.footer a{color:var(--primary-d,#3a63d8);text-decoration:none;font-weight:600}
+.footer a:hover{text-decoration:underline}
+@media (max-width:760px){.footer{padding:0 14px 24px;gap:4px 12px}}

@@ -1,0 +1,57 @@
+name: 问题报告
+description: 报告生成失败、渲染异常或交互问题
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交前请先确认 `npm run build` 通过，并阅读 README 的「配置提示」。
+        **请勿粘贴真实 API Key、完整的 Base URL 或模型返回原文。**
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么
+      description: 你做了什么操作，期望什么结果，实际看到什么
+      placeholder: 点击生成后状态区显示「网络没连上…」
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 模式选择「火柴人」
+        2. 输入「一个正在跑步的火柴人」
+        3. 点击生成
+    validations:
+      required: true
+  - type: dropdown
+    id: error-kind
+    attributes:
+      label: 页面显示的错误类别
+      options:
+        - 网络 / 跨域相关
+        - 密钥无效或没有权限（401/403）
+        - 接口地址不对（404）
+        - 请求太频繁（429）
+        - 这次没画出来 / SVG 无效
+        - 超时或卡住
+        - 没有报错，但结果不对
+        - 其他
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: 浏览器与操作系统
+      placeholder: Chrome 131 / Windows 11
+    validations:
+      required: true
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: 自查
+      options:
+        - label: 端点为 HTTPS 且允许浏览器跨域（CORS）
+        - label: 已在别处验证该端点与 Key 可用
+        - label: 提交内容中不含任何真实凭据
+          required: true

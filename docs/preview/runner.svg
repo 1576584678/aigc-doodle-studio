@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400" role="img" aria-label="一个正在跑步的火柴人，火柴人示例">
+  <g fill="none" stroke="#222" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="206" cy="96" r="28"/>
+    <path d="M206 124 L186 216"/>
+    <path d="M194 154 L136 126"/>
+    <path d="M194 154 L252 178 L272 152"/>
+    <path d="M186 216 L130 276 L98 268"/>
+    <path d="M186 216 L248 260 L254 308"/>
+  </g>
+  <g fill="none" stroke="#8a9099" stroke-width="4" stroke-linecap="round">
+    <path d="M78 122 L136 122"/>
+    <path d="M64 152 L122 152"/>
+    <path d="M82 182 L130 182"/>
+  </g>
+</svg>

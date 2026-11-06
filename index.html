@@ -3,8 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="描述一句话，生成可直接下载的 SVG 简笔画 / 火柴人。纯前端、零后端、自带模型与 Key，数据仅存本机。" />
+    <meta property="og:title" content="AIGC 简笔画工坊" />
+    <meta property="og:description" content="一句话生成 SVG 简笔画与火柴人 · 纯前端 · 零后端 · 自带模型与 Key" />
+    <meta property="og:type" content="website" />
     <title>AIGC 简笔画工坊</title>
-    <link rel="stylesheet" href="/src/style.css" />
+    <link rel="stylesheet" href="./src/style.css" />
   </head>
   <body>
     <header class="topbar">
@@ -19,7 +23,7 @@
           <summary>⚙️ 模型设置</summary>
           <label>
             API Base URL
-            <input id="baseUrl" type="text" placeholder="http://aibox.richaibox.com:2026/v1" />
+            <input id="baseUrl" type="text" placeholder="https://api.example.com/v1" />
           </label>
           <label>
             API Key
@@ -27,9 +31,9 @@
           </label>
           <label>
             Model
-            <input id="model" type="text" placeholder="glm-5.2" />
+            <input id="model" type="text" placeholder="填写你的模型名称" />
           </label>
-          <p class="key-warning">设置保存在本机浏览器，不会上传；但 API Key 以明文存放，公用电脑请勿保存</p>
+          <p class="key-warning">设置保存在本机浏览器，不会上传；但 API Key 以明文存放，公用电脑请勿保存。本站不收费，模型调用费用由你与所选服务商结算；浏览器直连要求端点为 HTTPS 且允许跨域（CORS）。</p>
         </details>
 
         <label class="mode-label">生成模式</label>
@@ -80,8 +84,13 @@
       </section>
     </main>
 
+    <footer class="footer">
+      <span>本站不收费 · 模型与 API Key 由你自备 · 数据仅存本机</span>
+      <a href="https://github.com/1576584678/aigc-doodle-studio" target="_blank" rel="noopener noreferrer">GitHub 源码与文档</a>
+    </footer>
+
     <div class="toast-region" id="toast-region" aria-live="polite"></div>
 
-    <script type="module" src="/src/main.ts"></script>
+    <script type="module" src="./src/main.ts"></script>
   </body>
 </html>
