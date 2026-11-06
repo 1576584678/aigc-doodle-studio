@@ -151,6 +151,26 @@
         return [mk('g_test_a', 60, 1700000000001), mk('g_test_b', 70, 1700000000002), mk('g_test_c', 80, 1700000000003)]
       }
 
+      /**
+       * 在 iframe realm 内从 /src/styles.ts 与 /src/history.ts 动态 import，
+       * 取到与被测应用 main.ts 同一份 ES 模块实例（同一 document / 同一 module map）。
+       * 这样 getActiveStyle() / currentHistoryItem() 读到的才是应用真实状态，
+       * 而不是测试页 realm 里那份彼此独立的模块副本。
+       */
+      async function appModules() {
+        const code = 'Promise.all([import("/src/styles.ts"), import("/src/history.ts")])'
+        let pair = null
+        try { pair = await win.eval(code) } catch { /* 换等价的间接 eval 再试 */ }
+        if (!pair || !pair[0] || typeof pair[0].getActiveStyle !== 'function') {
+          pair = await win.Function('return ' + code)()
+        }
+        if (!pair || !pair[0] || typeof pair[0].getActiveStyle !== 'function' ||
+            !pair[1] || typeof pair[1].currentHistoryItem !== 'function') {
+          throw new Error('无法在 iframe realm 内导入 /src/styles.ts 与 /src/history.ts')
+        }
+        return { styles: pair[0], history: pair[1] }
+      }
+
       // ------------------------------------------------------------ 断言组
       let tiles = []
       let fetchSpy = null
@@ -436,6 +456,89 @@
         spy.handler = null
       }
 
+      /**
+       * 新增组（不改既有 7 组）：
+       *   ① 清除操作后 .style-btn[data-style="minimal"] 复位（FR-13 / C-20）
+       *   ② 「换个风格重画」后 getActiveStyle()（从 /src/styles.ts 导入）与历史项记录的 style 一致
+       */
+      async function groupRedoAndStyle() {
+        await loadApp({
+          aigc_doodle_settings: JSON.stringify({ baseUrl: 'https://api.example.com/v1', apiKey: 'test-key-not-real', model: 'test-model' }),
+          aigc_doodle_gallery: JSON.stringify(gallerySeed())
+        })
+        const cuteBtn = doc.querySelector('.style-btn[data-style="cute"]')
+        cuteBtn.click()
+        await sleepFrames(2)
+        const switchedBeforeClear = cuteBtn.classList.contains('is-active') &&
+          cuteBtn.getAttribute('aria-pressed') === 'true'
+        try { frame.focus(); win.focus() } catch { /* 忽略 */ }
+        doc.querySelector('.link-danger').click()
+        await sleepFrames(2)
+        doc.querySelector('.confirm-dialog .btn-danger').click()
+        await sleepFrames(3)
+        const minimalBtn = doc.querySelector('.style-btn[data-style="minimal"]')
+        const barAtClear = doc.querySelector('.redo-bar')
+        check('确认清除 → .style-btn[data-style="minimal"] 仍为 .is-active 且 aria-pressed="true"（FR-13 / C-20）',
+          switchedBeforeClear &&
+          !!minimalBtn && minimalBtn.classList.contains('is-active') &&
+          minimalBtn.getAttribute('aria-pressed') === 'true' &&
+          cuteBtn.getAttribute('aria-pressed') === 'false' &&
+          !!barAtClear && barAtClear.hidden === true,
+          '清除前已切到 cute=' + switchedBeforeClear +
+          ' / minimal class=' + (minimalBtn ? minimalBtn.className : '缺失') +
+          ' pressed=' + (minimalBtn ? minimalBtn.getAttribute('aria-pressed') : '缺失') +
+          ' / cute pressed=' + cuteBtn.getAttribute('aria-pressed') +
+          ' / redo-bar hidden=' + (barAtClear ? barAtClear.hidden : '缺失'))
+
+        // 配置 + 探针：让 #generate 走一次真正成功的生成（fetch 返回合法 SVG，不触网）
+        const spy = patchFetch(win)
+        try {
+          Object.defineProperty(win.navigator, 'onLine', { configurable: true, get: () => true })
+        } catch { /* 不可重定义时沿用浏览器默认值 */ }
+        const fakeSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">' +
+          '<circle cx="200" cy="200" r="60" fill="none" stroke="#222" stroke-width="4"/></svg>'
+        spy.handler = () => Promise.resolve(new win.Response(
+          JSON.stringify({ choices: [{ message: { content: fakeSvg } }] }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        ))
+        doc.querySelector('#baseUrl').value = 'https://api.example.com/v1'
+        doc.querySelector('#apiKey').value = 'test-key-not-real'
+        doc.querySelector('#model').value = 'test-model'
+        doc.querySelector('#prompt').value = '一条奔跑的小狗'
+        doc.querySelector('#generate').click()
+        const genReady = await waitFor(() => {
+          const b = doc.querySelector('.redo-bar')
+          return !!b && !b.hidden && doc.querySelectorAll('.history-item').length === 1
+        }, 500)
+
+        let mods = null
+        let modErr = ''
+        try { mods = await appModules() }
+        catch (e) { modErr = e && e.message ? e.message : String(e) }
+        const before = mods ? mods.styles.getActiveStyle() : '(无法读取)'
+        const swapBtn = doc.querySelector('.redo-bar .redo-style') ||
+          Array.from(doc.querySelectorAll('.redo-bar button'))
+            .find((b) => /换个风格重画/.test(b.textContent || ''))
+        const swapLabel = swapBtn ? String(swapBtn.getAttribute('aria-label') || '') : ''
+        let settled = false
+        if (genReady && swapBtn) {
+          swapBtn.click()
+          settled = await waitFor(() => doc.querySelectorAll('.history-item').length === 2, 500)
+        }
+        const active = mods ? mods.styles.getActiveStyle() : '(无法读取)'
+        const item = mods ? mods.history.currentHistoryItem() : null
+        const activeBtn = doc.querySelector('.style-btn[data-style="' + active + '"]')
+        check('换个风格重画 → getActiveStyle()（src/styles.ts）与历史项记录的 style 一致且已切档',
+          !!mods && genReady && settled && !!item &&
+          active === item.style && active !== before &&
+          !!activeBtn && activeBtn.classList.contains('is-active') &&
+          /^换成.+风格重画$/.test(swapLabel),
+          '模块导入=' + (mods ? 'ok' : modErr) + ' / 首次生成=' + genReady +
+          ' / 二次生成=' + settled + ' / getActiveStyle()=' + active +
+          ' / 历史项 style=' + (item ? item.style : '无') +
+          ' / 切换前=' + before + ' / aria-label=' + swapLabel)
+      }
+
       // ------------------------------------------------------------ 执行
       let fatal = null
       const groups = [
@@ -445,7 +548,8 @@
         ['分享卡片', groupShareCard],
         ['画廊删除与撤销', groupGalleryUndo],
         ['清除事务与打印', groupClearTransaction],
-        ['自检分类', groupSelfTest]
+        ['自检分类', groupSelfTest],
+        ['重画兜底与风格复位', groupRedoAndStyle]
       ]
       for (const [label, fn] of groups) {
         try { await fn() }

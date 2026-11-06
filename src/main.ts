@@ -50,6 +50,7 @@ import {
 } from './styles'
 import { initLayout, syncMobileOrder } from './layout'
 import { initPrint } from './print'
+import { initRedo, setRedoVisible } from './redo'
 import { track } from './telemetry'
 import {
   styleLabel,
@@ -98,6 +99,7 @@ function setState(next: State): void {
   const interactive = next !== 'generating' && next !== 'cancelling'
   setSelfTestEnabled(interactive)
   setStyleEnabled(interactive)
+  setRedoVisible(next === 'success' && hasWork() && currentSource() === 'gen')
 }
 
 // ---------- 设置持久化（SEC-04：勾选「本次不保存 Key」时排除 apiKey） ----------
@@ -165,6 +167,8 @@ function loadWork(
     ? pushHistory(toHistory(meta, opts.model ?? dom.model.value.trim()))
     : false
   renderWork(meta)
+  // 点示例 / 画廊 / 历史时 loadWork 不一定走 setState，这里同步收起重画条，避免残留误导
+  setRedoVisible(state === 'success' && hasWork() && currentSource() === 'gen')
   if (opts.statusText) {
     setStatus(
       overflow
@@ -816,6 +820,7 @@ initSelfTest()
 initExport()
 initPrint()
 initStylePicker()
+initRedo()
 
 initClear({
   resetGeneration: () => {
