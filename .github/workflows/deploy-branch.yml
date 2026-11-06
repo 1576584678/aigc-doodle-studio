@@ -1,0 +1,52 @@
+name: Deploy (branch fallback)
+
+# 备用发布链路：把构建产物推到 gh-pages 分支，由 Pages 的
+# 「Deploy from a branch」直接发布，完全绕开 deploy-pages API
+# 及其 github-pages 环境的部署队列（该队列可能被卡住的部署锁死）。
+# 与 deploy-pages.yml 互不冲突：本工作流只更新一个分支，不创建部署。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pages-branch
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          # 项目页部署需要子路径；若改用自定义域名，改为 '/'
+          VITE_BASE: /aigc-doodle-studio/
+
+      - name: Publish to gh-pages branch
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          publish_branch: gh-pages
+          # 禁止 Jekyll 处理，避免下划线路径被忽略
+          enable_jekyll: false
+          # 每次以单提交孤儿分支覆盖，保持部署分支干净
+          force_orphan: true
+          commit_message: 'deploy: ${{ github.sha }}'
