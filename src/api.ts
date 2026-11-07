@@ -122,8 +122,8 @@ export function classifyHttpStatus(status: number): FailureInfo {
   if (status === 400) {
     return {
       category: 'other',
-      message: '请求没被接受，请缩短描述后再试',
-      action: '请缩短描述或检查模型名称'
+      message: '请求没被接受，多半是模型名、端点地址或请求参数不对',
+      action: '请核对模型名称与端点地址后重试'
     }
   }
   if (status >= 500) {

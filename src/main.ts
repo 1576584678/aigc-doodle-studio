@@ -68,12 +68,21 @@ let cancelReason: CancelReason = null
 let retryCount = 0
 let attemptTimer: number | null = null
 let totalTimer: number | null = null
+let slowHintTimer: number | null = null
 let lastGeneratedPrompt = ''
 let currentModeValue: GenMode = 'doodle' // 模式按钮选中态（决定下一次生成，不等于画布内容）
 
 const ATTEMPT_TIMEOUT_MS = 45000
 const TOTAL_TIMEOUT_MS = 90000
 const RETRY_DELAY_MS = 800
+/** 早于硬超时的「无响应」提示：12s 没有结果就给可行动作，避免长时间干等转圈。 */
+const SLOW_HINT_MS = 12000
+/**
+ * 超时不再归咎于描述长度：像「一只奔跑的小狗」这种短描述也超时，
+ * 基本来自端点/模型侧（响应慢、思考模式、连接挂起），提示应指向排查动作。
+ */
+const TIMEOUT_MESSAGE =
+  '生成超时：模型在限定时间内没有返回。请点「测试连接」确认端点可用，或换一个响应更快的模型/端点再试'
 
 /** 通过函数读取 state，规避 TS 对跨回调写入的控制流收窄。 */
 function readState(): State {
@@ -389,9 +398,16 @@ async function submit(): Promise<void> {
   totalTimer = window.setTimeout(() => {
     if (readCancelReason() !== null) return
     cancelReason = 'total'
-    setStatus('生成时间太长，已停止。请缩短描述或稍后再试', 'error')
+    setStatus(TIMEOUT_MESSAGE, 'error')
     if (controller && !controller.signal.aborted) controller.abort()
   }, TOTAL_TIMEOUT_MS)
+
+  // 早于硬超时的无响应提示：12s 内没有任何结果就给出可行动作，
+  // 避免用户面对「正在生成」一直转圈却不知道可以取消或去做连接自检。
+  slowHintTimer = window.setTimeout(() => {
+    if (readCancelReason() !== null || readState() !== 'generating') return
+    setStatus('模型还没有返回，可能响应较慢。可点「取消生成」停止，超时后点「测试连接」排查端点', 'info')
+  }, SLOW_HINT_MS)
 
   const opts = {
     baseUrl,
@@ -441,7 +457,7 @@ async function submit(): Promise<void> {
         }
         if (singleTimedOut && readCancelReason() === null) {
           cancelReason = 'single'
-          setStatus('生成时间太长，已停止。请缩短描述或稍后再试', 'error')
+          setStatus(TIMEOUT_MESSAGE, 'error')
         }
         throw e
       } finally {
@@ -483,6 +499,10 @@ async function submit(): Promise<void> {
     if (attemptTimer !== null) {
       window.clearTimeout(attemptTimer)
       attemptTimer = null
+    }
+    if (slowHintTimer !== null) {
+      window.clearTimeout(slowHintTimer)
+      slowHintTimer = null
     }
     controller = null
     cancelReason = null

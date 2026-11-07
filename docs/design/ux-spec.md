@@ -362,6 +362,7 @@ flowchart TD
 | `ATTEMPT_TIMEOUT_MS` | 45000 | 每次 attempt 开始创建、结束/重试时清除 | 单次请求 45s；**重试重新计满 45s** |
 | `TOTAL_TIMEOUT_MS` | 90000 | `submit()` 进入 `generating` 时创建，`finally` 清除 | 从 t0 起算，**永不重置**；含 800ms 重试延迟；优先于任何 attempt 计时器 |
 | `RETRY_DELAY_MS` | 800 | 可 abort 的 `abortableDelay`（沿用 `main.ts:158-173`） | 重试前延迟；期间 `cancelReason !== null` 则直接 break |
+| `SLOW_HINT_MS` | 12000 | `submit()` 进入 `generating` 时创建，`finally` 清除 | 早于硬超时的无响应提示：12s 仍无结果则写一次 `#status` info，给出「取消生成 / 测试连接」可行动作；不改状态机、不触发 abort、不写历史 |
 | `cancelReason` | `'user' \| 'timeout' \| 'single' \| 'total' \| null` | 既有字段扩展 | `cancelling` 期间任何 resolve 一律丢弃（不变量不改） |
 
 **主状态机事件表**
@@ -375,7 +376,7 @@ flowchart TD
 | `retryable_fail`（network / 5xx, attempt=0, `cancelReason===null`） | `generating` | 清 `attemptTimer`；`setStatus('网络没连上，正在重试一次…')`；`abortableDelay(800)`；**确认未取消后**才真正发起第 2 次请求并重新计 45s | `generating` | 保留 | 不写 | 「正在重试一次…」（与实际重试一致） |
 | `non_retryable_fail`（401/403/404/429/CORS/非 SVG/危险节点） | `generating` | 不重试；分类文案 + `.status-action` | `error` | 保留 + 右上「上次成功结果」角标（条件见 §1.3.1） | 不写、不清除 | 六类之一 |
 | `single_timeout`（45s, attempt 内） | `generating` | 若仍可重试按 `retryable_fail` 处理；否则 abort | `error` | 保留 | 不写 | EX-09 文案 |
-| `total_timeout`（90s 从 t0） | `generating` / 重试中 | `cancelReason='total'`、abort、清所有计时器、**不报成功、不更新画布** | `error` | 保留 | 不写 | 「生成时间太长，已停止。请缩短描述或稍后再试」 |
+| `total_timeout`（90s 从 t0） | `generating` / 重试中 | `cancelReason='total'`、abort、清所有计时器、**不报成功、不更新画布** | `error` | 保留 | 不写 | 「生成超时：模型在限定时间内没有返回。请点『测试连接』确认端点可用，或换一个响应更快的模型/端点再试」 |
 | `user_cancel` | `generating` | `state='cancelling'`、`cancelReason='user'`、abort | `cancelling` | 保留 | 不写 | 「正在取消…」→「已取消，可以重新生成」 |
 | `cleanup_done`（finally） | `cancelling`/`generating` | 清计时器、复位按钮、焦点兜底回 `#generate` | `idle` 或 `error` | 保留 | 不写 | 不覆盖已有超时文案 |
 | `input_change`（任一输入框） | `error` | `clearStatus()` + 移除角标 | `idle` | 保留 | 不写 | 清空 |
@@ -760,7 +761,7 @@ flowchart TD
 | EX-06 | 429 | 「请求太频繁，稍等一会儿再试」 | 不重试（生成与自检均不重试） | 同上 |
 | EX-07 | 5xx / 网络失败 | 「网络没连上，正在重试一次…」→ 分类文案 | 单次重试、**分段计时**、文案与实际重试一致；自检路径不重试 | `#status` |
 | EX-08 | 返回非 SVG / 解析失败 | 「这次没画出来，换个说法或再试一次」 | 不重试、保留上一张与 prompt、「再画一张」按钮、不写历史 | `#status` 一次 |
-| EX-09 | 超时（45s/90s） | 「生成时间太长，已停止。请缩短描述或稍后再试」 | abort、清计时器、不写历史、不更新画布、`finally` 不覆盖文案 | `#status` 一次 |
+| EX-09 | 超时（45s/90s） | 「生成超时：模型在限定时间内没有返回。请点『测试连接』确认端点可用，或换一个响应更快的模型/端点再试」 | abort、清计时器、不写历史、不更新画布、`finally` 不覆盖文案 | `#status` 一次 |
 | EX-10 | 用户取消 | 「已取消，可以重新生成」 | 丢弃任何 resolve、焦点留 `#generate`、不写历史 | `#status` 一次 |
 | EX-11 | 画廊满 50 | toast「画廊最多保存 50 张，请先删除几张再存入」 | 「存入画廊」禁用 + `title`；`.gallery-count.is-full`；`role=alert` | `#toast-region` 一次 |
 | EX-12 | 存储配额不足 | toast「浏览器存储空间不足，请先删除几张作品再试」 | 不写半截数据；`role=alert` | `#toast-region` 一次 |
