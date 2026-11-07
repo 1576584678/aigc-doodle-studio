@@ -176,6 +176,19 @@ function authHeaders(apiKey: string): Record<string, string> {
   return headers
 }
 
+/**
+ * DeepSeek V4.1 Flash（模型名 deepseek-flash）默认开启思考模式且 effort=high，
+ * 与「只输出一段纯 SVG」的目标有三处冲突：
+ *   ① 思考模式静默忽略 temperature（官方明确说明，不报错也不生效）；
+ *   ② 长思维链显著拖慢响应，容易撞上 45s 单次超时；
+ *   ③ 思考预算挤占输出 token，最终 content 可能被截断成半截 SVG。
+ * 因此仅对 deepseek 系列显式关闭思考模式；其他端点不发送这个厂商私有字段，
+ * 避免未知参数导致 400。若第三方中转使用别名模型名，此判断不会命中，可按需改为开关。
+ */
+function thinkingParams(model: string): Record<string, unknown> {
+  return /^deepseek/i.test(model.trim()) ? { thinking: { type: 'disabled' } } : {}
+}
+
 /** 生成并过滤一张 SVG。重试由 main.ts 的 submit 循环控制，此处不重试。 */
 export async function generateSvg(opts: GenOptions, signal?: AbortSignal): Promise<string> {
   const endpoint = buildEndpoint(opts.baseUrl)
@@ -202,8 +215,10 @@ export async function generateSvg(opts: GenOptions, signal?: AbortSignal): Promi
       body: JSON.stringify({
         // 模型名必须显式填写，绝不回落到任何内置默认值
         model: opts.model.trim(),
+        ...thinkingParams(opts.model),
         messages,
-        // 结构化 XML 输出要求稳定：0.7 易造成坐标漂移、多输出解释文字，降到 0.4
+        // 结构化 XML 输出要求稳定：0.7 易造成坐标漂移、多输出解释文字，降到 0.4。
+        // 注意：DeepSeek 思考模式下该参数被忽略，需靠上面的 thinking:disabled 才生效。
         temperature: 0.4,
         // 显式上限，避免端点默认 max_tokens 过小（部分默认 512）导致 SVG 被截断后解析失败。
         // 若所用端点不接受 max_tokens 并返回 400，可移除本字段。
@@ -265,6 +280,7 @@ export async function testConnectionRequest(
       headers: authHeaders(opts.apiKey),
       body: JSON.stringify({
         model: opts.model.trim(),
+        ...thinkingParams(opts.model),
         messages: [{ role: 'user', content: 'ping' }],
         max_tokens: 1,
         temperature: 0,
