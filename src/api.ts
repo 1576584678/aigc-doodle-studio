@@ -1,4 +1,10 @@
-import { DOODLE_PROMPT, STICKMAN_PROMPT, buildSystemPrompt } from './prompts'
+import {
+  DOODLE_PROMPT,
+  STICKMAN_PROMPT,
+  buildSystemPrompt,
+  buildUserPrompt,
+  examplesForBase
+} from './prompts'
 import { sanitizeSvg } from './sanitize'
 import type { StyleKey, TestCategory } from './types'
 
@@ -39,14 +45,31 @@ export function buildEndpoint(baseUrl: string): string {
   return `${trimmed}/chat/completions`
 }
 
-/** 从模型返回的 content 中抽取 <svg>...</svg>，兼容被 ```svg 包裹的情况。 */
+/**
+ * 从模型返回的 content 中抽取 <svg>...</svg>，兼容被 ```svg 包裹的情况。
+ *
+ * 另加一层截断容错：部分 BYOK 端点默认 max_tokens 很小，模型会在写完 </svg> 之前
+ * 被切断，旧版直接判为「没画出来」。这里截到最后一个完整标签再补闭合标签；
+ * 修补结果仍交给 sanitizeSvg 做 XML 合法性与白名单判定，非法照常失败，不放宽安全边界。
+ */
 export function extractSvg(content: string): string {
   if (!content) throw new ApiError('invalid-svg', BAD_SVG_MESSAGE)
   const fence = content.match(/```(?:svg)?\s*([\s\S]*?)```/i)
   const raw = fence ? fence[1] : content
   const match = raw.match(/<svg[\s\S]*?<\/svg>/i)
-  if (!match) throw new ApiError('invalid-svg', BAD_SVG_MESSAGE)
-  return match[0].trim()
+  if (match) return match[0].trim()
+
+  const start = raw.search(/<svg\b/i)
+  if (start < 0) throw new ApiError('invalid-svg', BAD_SVG_MESSAGE)
+  const tail = raw.slice(start)
+  const lastGt = tail.lastIndexOf('>')
+  if (lastGt <= 0) throw new ApiError('invalid-svg', BAD_SVG_MESSAGE)
+  const repaired = `${tail.slice(0, lastGt + 1)}</svg>`
+  // 至少要有 1 个实际绘图图元，避免把「只有根元素 + 解释文字」当成成功作品
+  if (!/<(?:path|line|circle|rect|ellipse|polyline|polygon|g|text)\b/i.test(repaired)) {
+    throw new ApiError('invalid-svg', BAD_SVG_MESSAGE)
+  }
+  return repaired.trim()
 }
 
 // ---------- 失败分类（生成与自检共用同一口径，FR-03 / EX-03~07） ----------
@@ -156,10 +179,20 @@ function authHeaders(apiKey: string): Record<string, string> {
 /** 生成并过滤一张 SVG。重试由 main.ts 的 submit 循环控制，此处不重试。 */
 export async function generateSvg(opts: GenOptions, signal?: AbortSignal): Promise<string> {
   const endpoint = buildEndpoint(opts.baseUrl)
-  const system = buildSystemPrompt(
-    opts.mode === 'stickman' ? STICKMAN_PROMPT : DOODLE_PROMPT,
-    opts.style
-  )
+  const base = opts.mode === 'stickman' ? STICKMAN_PROMPT : DOODLE_PROMPT
+  const system = buildSystemPrompt(base, opts.style)
+
+  // few-shot：用站内原创 SVG 示范「描述 → 纯 SVG」的输出契约与画风。
+  // 相比堆叠抽象规则，示范对中小模型稳定输出格式与构图更有效；
+  // 示例是站内固定常量，不含任何用户数据，也不进入 DOM。
+  const messages = [
+    { role: 'system', content: system },
+    ...examplesForBase(base).flatMap((example) => [
+      { role: 'user', content: buildUserPrompt(example.prompt) },
+      { role: 'assistant', content: example.svg }
+    ]),
+    { role: 'user', content: buildUserPrompt(opts.prompt) }
+  ]
 
   let res: Response
   try {
@@ -169,11 +202,12 @@ export async function generateSvg(opts: GenOptions, signal?: AbortSignal): Promi
       body: JSON.stringify({
         // 模型名必须显式填写，绝不回落到任何内置默认值
         model: opts.model.trim(),
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: opts.prompt }
-        ],
-        temperature: 0.7,
+        messages,
+        // 结构化 XML 输出要求稳定：0.7 易造成坐标漂移、多输出解释文字，降到 0.4
+        temperature: 0.4,
+        // 显式上限，避免端点默认 max_tokens 过小（部分默认 512）导致 SVG 被截断后解析失败。
+        // 若所用端点不接受 max_tokens 并返回 400，可移除本字段。
+        max_tokens: 2048,
         stream: false
       }),
       signal
